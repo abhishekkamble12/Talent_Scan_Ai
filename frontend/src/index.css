@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply antialiased;
+  }
+}
+
+@layer utilities {
+  .animate-gradient {
+    background-size: 200% 200%;
+    animation: gradient-shift 6s ease infinite;
+  }
+
+  .glass {
+    @apply bg-white/5 backdrop-blur-md border border-white/10;
+  }
+
+  .glow-indigo {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+  }
+
+  .glow-emerald {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.25);
+  }
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-6px); }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.shimmer-text {
+  background: linear-gradient(90deg, #818cf8 0%, #34d399 40%, #818cf8 80%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer 3s linear infinite;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Prose tweaks for ReactMarkdown */
+.prose-custom h1, .prose-custom h2, .prose-custom h3 {
+  color: #a5b4fc;
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+.prose-custom p {
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  margin-bottom: 0.5rem;
+}
+.prose-custom ul, .prose-custom ol {
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  padding-left: 1rem;
+  margin-bottom: 0.5rem;
+}
+.prose-custom li {
+  margin-bottom: 2px;
+}
+.prose-custom strong {
+  color: #fff;
+}
+.prose-custom code {
+  background: #1e293b;
+  color: #34d399;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+}
+.prose-custom table {
+  width: 100%;
+  font-size: 0.75rem;
+  border-collapse: collapse;
+}
+.prose-custom th {
+  background: rgba(79,70,229,0.2);
+  color: #a5b4fc;
+  padding: 4px 8px;
+  border: 1px solid #334155;
+  text-align: left;
+}
+.prose-custom td {
+  color: #cbd5e1;
+  padding: 4px 8px;
+  border: 1px solid #1e293b;
+}
