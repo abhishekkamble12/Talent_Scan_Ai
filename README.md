@@ -85,6 +85,13 @@ cd ..
 ```
 
 ### 4. Run the Project
+**Option A — Docker Compose (recommended):**
+```bash
+docker compose up --build
+```
+Open **http://localhost:5173** (Frontend) and **http://localhost:5000/docs** (FastAPI Swagger UI).
+
+**Option B — Local Demo Script:**
 Launch both Backend and Frontend in one step:
 ```bat
 start_project.bat

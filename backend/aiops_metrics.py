@@ -16,7 +16,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any
 
-DB_PATH = Path(__file__).resolve().parent.parent / "aiops_metrics.db"
+DB_PATH = Path(os.getenv("AIOPS_DB_PATH", str(Path(__file__).resolve().parent.parent / "aiops_metrics.db")))
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass

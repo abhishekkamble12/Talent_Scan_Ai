@@ -1,0 +1,15 @@
+.git
+.gitignore
+.agents
+.env
+__pycache__
+*.pyc
+*.pyo
+*.db
+chroma/
+uploads/
+frontend/node_modules
+frontend/dist
+*.png
+*.jpeg
+*.jpg
