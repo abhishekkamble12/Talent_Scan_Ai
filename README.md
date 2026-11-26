@@ -10,8 +10,11 @@
 
 - **Automated PDF Resume Ingestion**: Parses, splits, and embeds PDF resumes into ChromaDB vector database.
 - **RAG-Powered Candidate Q&A**: Uses hybrid similarity retrieval against the job description and candidate profiles to answer technical screening questions.
-- **1-Click Demo Pre-loader**: Instantly seeds the database with sample candidate resumes and a full Job Description for quick, hassle-free presentations.
-- **Modern Responsive UI**: Clean two-column interface built with React, Vite, and TailwindCSS featuring real-time system status indicators.
+- **Candidate Pool Directory**: Filterable directory of all indexed candidate documents with direct 1-click evaluation triggers.
+- **AI Performance & Observability (AIOps)**: Real-time telemetry tracking vector similarity, P50/P95 latency, token cost estimates, and automated LLM-as-a-judge quality ratings stored in SQLite.
+- **1-Click Demo Pre-loader**: Instantly seeds the database with sample candidate resumes and a full Job Description for quick presentations.
+- **Command Palette (`Ctrl+K`)**: Native `<dialog>` top-layer command palette for rapid view navigation and actions.
+- **Modern Accessible UI**: Fluid SPA built with React 18, Vite, and TailwindCSS featuring the View Transitions API, auto-sizing inputs, and dark-mode native styling.
 - **Markdown-Safe Output**: Renders structured candidate comparisons, skills matrices, and interview question suggestions safely with `react-markdown`.
 
 ---
@@ -31,12 +34,14 @@ User / Recruiter
                              │ REST API
                              ▼
 ┌──────────────────────────────────────────────────────────┐
-│              Flask Backend API (Port 5000)               │
+│              FastAPI Backend API (Port 5000)             │
+│  - /docs             : Interactive Swagger / OpenAPI UI  │
 │  - /api/status       : System health, resumes count      │
 │  - /api/upload       : Upload & index PDFs into Chroma   │
 │  - /api/predict      : RAG query synthesis with Gemini   │
 │  - /api/load-sample  : 1-click demo data seeder          │
 │  - /api/reset        : Wipe uploads & vector DB          │
+│  - /api/aiops/*      : Telemetry, latency & LLM judge    │
 └────────────────────────────┬─────────────────────────────┘
                              │
             ┌────────────────┴────────────────┐
@@ -85,10 +90,11 @@ Launch both Backend and Frontend in one step:
 start_project.bat
 ```
 Or start them manually in two terminals:
-- **Terminal 1 (Backend)**:
+- **Terminal 1 (Backend - FastAPI + Uvicorn)**:
   ```bash
   python backend/app.py
   ```
+  *(Interactive API docs available at **http://localhost:5000/docs**)*
 - **Terminal 2 (Frontend)**:
   ```bash
   cd frontend
@@ -121,10 +127,11 @@ resume-screener/
 ├── requirements.txt          # Python package requirements
 ├── start_project.bat         # Single-command demo startup script
 ├── seed_demo_data.py         # Standalone CLI demo data seeder
+├── aiops_metrics.db          # SQLite telemetry & LLM quality judge store
 ├── README.md                 # Project documentation
 │
 ├── backend/
-│   ├── app.py                # Flask REST API endpoints
+│   ├── app.py                # FastAPI REST API endpoints & AIOps routes
 │   ├── rag_pipeline.py       # LangChain + ChromaDB pipeline
 │   └── utils.py              # Gemini LLM invocation & prompt templates
 │
@@ -133,9 +140,18 @@ resume-screener/
 │
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx           # Main layout & system status badges
-│   │   ├── ResumeUploader.jsx# PDF upload, JD input & 1-click seed
-│   │   └── LLMQueryComponent.jsx # AI Q&A, suggested queries & markdown
+│   │   ├── api/
+│   │   │   └── client.js     # Centralized Axios API instance & env config
+│   │   ├── components/
+│   │   │   ├── CandidatePool.jsx     # Indexed resume directory & filter
+│   │   │   ├── CommandPalette.jsx    # Native <dialog> command palette (Ctrl+K)
+│   │   │   ├── LandingView.jsx       # Platform overview
+│   │   │   ├── WorkspaceSettings.jsx # Storage & API configuration
+│   │   │   └── ui.jsx                # Reusable design system primitives
+│   │   ├── AIOpsDashboard.jsx        # Live telemetry & LLM evaluation dashboard
+│   │   ├── App.jsx                   # Layout, navigation drawer & view transitions
+│   │   ├── ResumeUploader.jsx        # Accessible PDF upload & JD editor
+│   │   └── LLMQueryComponent.jsx     # AI Q&A, prompt chips & report export
 │   ├── index.html
 │   └── package.json
 │

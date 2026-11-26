@@ -141,6 +141,7 @@ class RAGPipeline:
         return {
             "total_chunks": total_chunks,
             "new_chunks_added": added_count,
+            "chunks_created": len(chunks),
         }
 
     def clear_database(self) -> None:
@@ -149,14 +150,43 @@ class RAGPipeline:
             logging.info(f"Cleared database at {self.database_path}")
 
     def run_pipeline(self) -> Dict[str, Any]:
-        documents = self.load_documents()
-        if not documents:
-            return {"status": "empty", "message": "No documents found to process.", "total_chunks": 0}
-        chunks = self.chunk_documents(documents)
-        stats = self.populate_chroma(chunks)
-        stats["status"] = "success"
-        stats["documents_loaded"] = len(documents)
-        return stats
+        import time
+        from aiops_metrics import metrics_store
+        
+        start_time = time.perf_counter()
+        try:
+            documents = self.load_documents()
+            if not documents:
+                res = {"status": "empty", "message": "No documents found to process.", "total_chunks": 0}
+                metrics_store.log_pipeline_run(0, 0, 0, 0, status="empty")
+                return res
+            chunks = self.chunk_documents(documents)
+            stats = self.populate_chroma(chunks)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            
+            stats["status"] = "success"
+            stats["documents_loaded"] = len(documents)
+            stats["pipeline_latency_ms"] = round(elapsed_ms, 2)
+            
+            metrics_store.log_pipeline_run(
+                docs_loaded=len(documents),
+                chunks_created=stats.get("chunks_created", len(chunks)),
+                chunks_added=stats.get("new_chunks_added", 0),
+                latency_ms=round(elapsed_ms, 2),
+                status="success"
+            )
+            return stats
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            metrics_store.log_pipeline_run(
+                docs_loaded=0,
+                chunks_created=0,
+                chunks_added=0,
+                latency_ms=round(elapsed_ms, 2),
+                status="error",
+                error=str(e)[:250]
+            )
+            raise e
 
 
 def main() -> None:
