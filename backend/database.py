@@ -409,6 +409,19 @@ class TalentScanDB:
 
         return self.get_candidate(candidate_id)
 
+    def update_candidate_name(self, candidate_id: str, name: str) -> Optional[Dict[str, Any]]:
+        """Updates candidate extracted real name."""
+        clean_name = name.strip()
+        if not clean_name:
+            return self.get_candidate(candidate_id)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE candidates SET name = ?, updated_at = ? WHERE id = ?",
+                (clean_name, now, candidate_id)
+            )
+        return self.get_candidate(candidate_id)
+
     def delete_candidate(self, candidate_id: str) -> bool:
         with self._connect() as conn:
             res = conn.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))

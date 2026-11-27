@@ -103,6 +103,7 @@ Your task is to analyze candidate resumes in relation to the Job Description, an
 ---
 ### INSTRUCTIONS:
 - Base your answers directly on the candidate resumes provided in the context.
+- ALWAYS identify and refer to candidates by their REAL full human name (e.g. **Aaryan Palve**, **Piyush Choudhari**, **Rushikesh Kulkarni**), NOT as "Candidate Resume_1.pdf", "Candidate 1", or by their filename.
 - Highlight specific strengths, matched skills, gaps, or flags where relevant.
 - Format your response clearly using markdown headings, bullet points, and bold candidate names.
 - Keep your analysis concise, structured, and actionable (around 200-350 words).
@@ -232,6 +233,18 @@ def prepare_rag_context(
         if len(results) < target_k and overflow:
             results.extend(overflow[: target_k - len(results)])
 
+        # Lookup candidate real names from SQLite database
+        filename_to_cand = {}
+        try:
+            from database import db
+            with db._connect() as conn:
+                rows = conn.execute("SELECT filename, name, fit_score FROM candidates").fetchall()
+                for r in rows:
+                    if r["filename"] and r["name"]:
+                        filename_to_cand[r["filename"].lower()] = dict(r)
+        except Exception as db_err:
+            logging.warning(f"Could not load candidate names for RAG context: {db_err}")
+
         # Compute retrieval quality metrics
         scores = [float(score) for _, score in results]
         unique_files = set()
@@ -241,7 +254,13 @@ def prepare_rag_context(
             src_name = Path(src).name if src else "unknown"
             if src:
                 unique_files.add(src_name)
-            context_blocks.append(f"[Candidate File: {src_name}]\n{doc.page_content}")
+            
+            c_info = filename_to_cand.get(src_name.lower())
+            if c_info and c_info.get("name") and c_info["name"].lower() not in ("candidate", "candidat", "resume"):
+                cand_header = f"[Candidate Name: {c_info['name']} (File: {src_name})]"
+            else:
+                cand_header = f"[Candidate File: {src_name}]"
+            context_blocks.append(f"{cand_header}\n{doc.page_content}")
 
         metrics.chunks_retrieved = len(results)
         metrics.avg_similarity_score = round(sum(scores) / len(scores), 4)

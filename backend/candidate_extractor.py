@@ -34,31 +34,62 @@ DEGREE_PATTERNS = [
 
 
 def extract_candidate_name_from_text(text: str, filename: str) -> str:
-    """Infers candidate full name from header or filename."""
+    """Infers candidate full real name from header, contact lines, email, or filename."""
+    DISALLOWED_KEYWORDS = {
+        "resume", "curriculum", "vitae", "summary", "profile", "contact",
+        "developer", "devloper", "engineer", "phone", "email", "github",
+        "linkedin", "portfolio", "experience", "education", "skills",
+        "projects", "objective", "certifications", "candidate", "candidat",
+        "page", "details", "technical", "languages", "frameworks", "tools"
+    }
+
     lines = [line.strip() for line in text.split("\n") if line.strip()]
 
-    # Check if lines 0 and 1 are split First Name / Last Name
+    # Priority 1: Check lines[:5]. If a line has 2-4 words that look like a person's name
+    for line in lines[:5]:
+        cleaned_line = re.sub(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", "", line)
+        cleaned_line = re.sub(r"https?://\S+|www\.\S+|github\.com/\S+|linkedin\.com/\S+", "", cleaned_line, flags=re.IGNORECASE)
+        cleaned_line = re.sub(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}", "", cleaned_line)
+        cleaned_line = re.sub(r"[|•·*~/\\()<>:;,]", " ", cleaned_line)
+        cleaned_line = re.sub(r"[^A-Za-z\s.'-]", " ", cleaned_line).strip()
+
+        words = [w for w in cleaned_line.split() if len(w) >= 2]
+        if 2 <= len(words) <= 4:
+            if not any(w.lower() in DISALLOWED_KEYWORDS for w in words):
+                return " ".join(words).title()
+
+    # Priority 2: Split First Name / Last Name across line 0 and line 1
     if len(lines) >= 2:
-        w0 = re.sub(r"[^A-Za-z]", "", lines[0]).strip()
-        w1 = re.sub(r"[^A-Za-z]", "", lines[1]).strip()
-        if w0 and w1 and len(w0) >= 2 and len(w1) >= 2:
-            if w0[0].isupper() and w1[0].isupper():
-                combined = f"{w0} {w1}"
-                if not any(kw in combined.lower() for kw in ["resume", "curriculum", "vitae", "summary", "profile", "contact", "developer", "engineer", "phone", "email"]):
-                    return combined
+        l0_words = re.sub(r"[^A-Za-z\s]", "", lines[0]).strip().split()
+        l1_words = re.sub(r"[^A-Za-z\s]", "", lines[1]).strip().split()
+        if len(l0_words) == 1 and len(l1_words) == 1:
+            w0, w1 = l0_words[0], l1_words[0]
+            if len(w0) >= 2 and len(w1) >= 2:
+                if w0.lower() not in DISALLOWED_KEYWORDS and w1.lower() not in DISALLOWED_KEYWORDS:
+                    return f"{w0.title()} {w1.title()}"
 
-    for line in lines[:6]:
-        clean = re.sub(r"[^A-Za-z\s.-]", "", line).strip()
-        words = clean.split()
-        if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if len(w) > 1):
-            if not any(kw in clean.lower() for kw in ["resume", "curriculum", "vitae", "summary", "profile", "contact", "developer", "engineer", "phone", "email"]):
-                return clean.title()
+    # Priority 3: Extract from email if present (e.g. choudhari.piyush@gmail.com -> Piyush Choudhari)
+    email_match = re.search(r"([a-zA-Z0-9_.+-]+)@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
+    if email_match:
+        local_part = email_match.group(1).lower()
+        local_part = re.sub(r"\d+", "", local_part)
+        parts = re.split(r"[._-]", local_part)
+        clean_parts = [p.title() for p in parts if len(p) >= 3 and p.lower() not in DISALLOWED_KEYWORDS]
+        if len(clean_parts) >= 2:
+            return " ".join(clean_parts[:2])
 
-    # Fallback to sanitized filename
+    # Priority 4: Clean filename if not generic
     base = Path(filename).stem
-    cleaned = re.sub(r"[-_](?:resume|cv|profile)?", " ", base, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[-_](?:resume|cv|profile|candidat|candidate)?", " ", base, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?:resume|cv|profile|candidat|candidate)[-_]?", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"[^A-Za-z\s]", " ", cleaned).strip()
-    return cleaned.title() if cleaned else Path(filename).stem
+    words = [w.title() for w in cleaned.split() if w.lower() not in DISALLOWED_KEYWORDS and len(w) >= 2]
+    if len(words) >= 2:
+        return " ".join(words)
+    elif len(words) == 1:
+        return words[0]
+
+    return "Candidate"
 
 
 def extract_skills_from_text(text: str) -> List[str]:

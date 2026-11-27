@@ -39,6 +39,7 @@ For each requirement, provide:
 5. reasoning: A 1-sentence explanation of why it was marked met/partial/missing.
 
 Also provide:
+- candidate_name: The candidate's real full human name extracted from their resume header (e.g. "Piyush Choudhari", "Jane Doe"). Never return the filename or generic words like "Candidate".
 - fit_score: An integer from 0 to 100 representing overall role alignment.
 - summary: A crisp 2-line executive summary of candidate strengths and fit.
 - gaps: A short comma-separated summary of critical missing requirements (e.g., "No Kubernetes, AWS experience").
@@ -47,6 +48,7 @@ Also provide:
 
 Respond ONLY with valid raw JSON in this structure:
 {{
+  "candidate_name": "Piyush Choudhari",
   "fit_score": 85,
   "summary": "Experienced backend engineer with strong Python and FastAPI services experience. Demonstrates solid database architecture knowledge.",
   "gaps": "No Kubernetes exposure; lacking cloud deployment evidence.",
@@ -332,6 +334,13 @@ def score_candidate_against_job(candidate_id: str, job_id: str) -> Dict[str, Any
                         "reasoning": scored.get("reasoning") or ""
                     })
 
+                # Update candidate real name if extracted by LLM
+                extracted_name = data.get("candidate_name")
+                if extracted_name and isinstance(extracted_name, str):
+                    c_name = extracted_name.strip()
+                    if c_name and len(c_name.split()) >= 2 and not any(kw in c_name.lower() for kw in ["resume", "candidate", "candidat", "pdf"]):
+                        db.update_candidate_name(candidate_id, c_name)
+
                 # Save to DB
                 db.save_candidate_scores(
                     candidate_id=candidate_id,
@@ -359,6 +368,14 @@ def score_candidate_against_job(candidate_id: str, job_id: str) -> Dict[str, Any
 
     # Fallback to deterministic heuristic
     logging.info(f"[ScoringService] Using heuristic scoring for candidate {candidate_id}")
+    current_name = candidate.get("name", "")
+    if not current_name or any(kw in current_name.lower() for kw in ["resume", "candidate", "candidat"]):
+        from candidate_extractor import extract_candidate_name_from_text
+        combined_text = "\n".join(p.get("text", "") for p in pages[:2])
+        refined_name = extract_candidate_name_from_text(combined_text, candidate.get("filename", ""))
+        if refined_name and refined_name.lower() not in ("candidate", "resume"):
+            db.update_candidate_name(candidate_id, refined_name)
+
     heuristic = heuristic_score_candidate(candidate, requirements, pages)
 
     db.save_candidate_scores(
