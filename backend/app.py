@@ -13,6 +13,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, File, Form, Query, UploadFile, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from pydantic import BaseModel
@@ -41,6 +42,8 @@ from scoring_service import (
     screen_all_candidates_generator,
 )
 from candidate_extractor import extract_profile_from_pages
+from upskilling_service import generate_candidate_upskilling_plan
+from feedback_reranker import apply_smart_rerank
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
@@ -119,6 +122,9 @@ jd_path = UPLOAD_FOLDER / "jd"
 pdfs_path = UPLOAD_FOLDER / "pdfs"
 jd_path.mkdir(parents=True, exist_ok=True)
 pdfs_path.mkdir(parents=True, exist_ok=True)
+
+# Mount static files to serve uploaded PDFs
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_FOLDER)), name="uploads")
 
 ALLOWED_EXTENSIONS = {"pdf"}
 
@@ -293,6 +299,7 @@ def delete_job(job_id: str, _auth: bool = Depends(verify_token_optional)):
 async def upload_job_candidates(
     job_id: str,
     resumes: List[UploadFile] = File(...),
+    source: Optional[str] = Form("direct_upload"),
     _auth: bool = Depends(verify_token_optional)
 ):
     """Bulk uploads PDF resumes directly into a specific job workspace."""
@@ -355,7 +362,7 @@ async def upload_job_candidates(
                     "summary": ""
                 }
 
-            # Insert into database
+            # Insert into database with tracked source
             cand_id = str(uuid.uuid4())
             new_cand = db.add_candidate({
                 "id": cand_id,
@@ -366,7 +373,8 @@ async def upload_job_candidates(
                 "education": profile.get("education", ""),
                 "years_exp": profile.get("estimated_years_exp", 2.0),
                 "summary": profile.get("summary", ""),
-                "status": "new"
+                "status": "new",
+                "source": source or "direct_upload"
             })
             uploaded_records.append(new_cand)
 
@@ -421,9 +429,13 @@ def list_job_candidates(
     job_id: str,
     status: Optional[str] = Query(None),
     min_score: Optional[int] = Query(None),
-    search: Optional[str] = Query(None)
+    search: Optional[str] = Query(None),
+    sort: Optional[str] = Query("fit_score")
 ):
-    """Returns ranked candidate list with fit scores, must-haves met, and gap summaries."""
+    """
+    Returns ranked candidate list with fit scores, must-haves met, and gap summaries.
+    Supports ?sort=learned or ?sort=smart_rerank to apply recruiter feedback-weighted reranking.
+    """
     try:
         candidates = db.list_candidates_for_job(
             job_id=job_id,
@@ -431,7 +443,24 @@ def list_job_candidates(
             min_score=min_score,
             search=search
         )
-        return {"candidates": candidates, "total": len(candidates)}
+
+        smart_active = sort in ("learned", "smart_rerank")
+        model_trained = False
+        feedback_signal = ""
+
+        if smart_active and candidates:
+            rerank_res = apply_smart_rerank(candidates)
+            candidates = rerank_res["candidates"]
+            model_trained = rerank_res["model_trained"]
+            feedback_signal = rerank_res["feedback_signal"]
+
+        return {
+            "candidates": candidates,
+            "total": len(candidates),
+            "smart_rerank_active": smart_active,
+            "model_trained": model_trained,
+            "feedback_signal": feedback_signal
+        }
     except Exception as e:
         logging.error(f"Error listing candidates for job {job_id}: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -480,6 +509,168 @@ def update_candidate_decision(
         return updated
     except Exception as e:
         logging.error(f"Error updating candidate {candidate_id}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ─────────────────────────────────────────────────────────────
+# 3b. Shareable Match Explanation & Upskilling Endpoints
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/api/candidates/{candidate_id}/share")
+def create_share_link(candidate_id: str, _auth: bool = Depends(verify_token_optional)):
+    """Generates a secure token for hiring managers to view a candidate match scorecard without login."""
+    try:
+        result = db.create_or_get_share_token(candidate_id)
+        return result
+    except Exception as e:
+        logging.error(f"Error generating share link for {candidate_id}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/api/candidates/{candidate_id}/share")
+def revoke_share_link(candidate_id: str, _auth: bool = Depends(verify_token_optional)):
+    """Revokes a shareable link for a candidate."""
+    try:
+        success = db.disable_share_token(candidate_id)
+        return {"revoked": success}
+    except Exception as e:
+        logging.error(f"Error revoking share link for {candidate_id}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/public/share/{token}")
+def get_public_scorecard(token: str):
+    """Public read-only candidate scorecard endpoint for hiring managers (no login required, notes omitted)."""
+    try:
+        card = db.get_candidate_by_share_token(token)
+        if not card:
+            return JSONResponse(status_code=404, content={"error": "Scorecard not found or link has expired."})
+        return card
+    except Exception as e:
+        logging.error(f"Error loading public scorecard: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/candidates/{candidate_id}/upskilling")
+def get_candidate_upskilling(candidate_id: str):
+    """Returns tailored upskilling roadmap, recommended courses, and project blueprints for candidate gaps."""
+    try:
+        cand = db.get_candidate(candidate_id)
+        if not cand:
+            return JSONResponse(status_code=404, content={"error": f"Candidate {candidate_id} not found."})
+
+        job_title = ""
+        if cand.get("job_id"):
+            job = db.get_job(cand["job_id"])
+            if job:
+                job_title = job["title"]
+
+        plan = generate_candidate_upskilling_plan(cand, job_title=job_title)
+        return plan
+    except Exception as e:
+        logging.error(f"Error generating upskilling plan for {candidate_id}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/api/candidate-self-check")
+async def candidate_self_check(
+    resume: UploadFile = File(...),
+    job_id: Optional[str] = Form(None),
+    job_description: Optional[str] = Form(None)
+):
+    """
+    Candidate-facing self-service check: uploads resume against an active job or custom JD,
+    and returns fit score, evidence breakdown, and customized upskilling roadmap.
+    """
+    try:
+        if not resume or not resume.filename:
+            return JSONResponse(status_code=400, content={"error": "Please provide a resume PDF."})
+
+        if not allowed_file(resume.filename):
+            return JSONResponse(status_code=400, content={"error": "Only PDF resumes are supported."})
+
+        # Resolve job or create ad-hoc temporary job
+        target_job_id = job_id
+        if not target_job_id:
+            desc = (job_description or "").strip()
+            if not desc:
+                # Default to first active job if exists
+                jobs = db.list_jobs()
+                if jobs:
+                    target_job_id = jobs[0]["id"]
+                else:
+                    target_job_id = create_job_with_requirements(DEFAULT_SAMPLE_JD, title="Full Stack Engineer")["id"]
+            else:
+                target_job_id = create_job_with_requirements(desc, title="Custom Job Opportunity")["id"]
+
+        job = db.get_job(target_job_id)
+        if not job:
+            return JSONResponse(status_code=404, content={"error": "Job not found."})
+
+        # Save resume file
+        filename = sanitize_filename(f"selfcheck_{resume.filename}")
+        target_path = pdfs_path / filename
+        with open(target_path, "wb") as buffer:
+            shutil.copyfileobj(resume.file, buffer)
+
+        from langchain_community.document_loaders import PyPDFLoader
+        import uuid
+
+        try:
+            loader = PyPDFLoader(str(target_path))
+            pages = [p.page_content for p in loader.load()]
+            profile = extract_profile_from_pages(filename, pages)
+        except Exception:
+            profile = {
+                "candidate_name": Path(filename).stem.replace("selfcheck_", "").replace("_", " ").title(),
+                "top_skills": "",
+                "estimated_years_exp": 2.0,
+                "education": "PDF Document",
+                "summary": ""
+            }
+
+        cand_id = str(uuid.uuid4())
+        cand = db.add_candidate({
+            "id": cand_id,
+            "job_id": target_job_id,
+            "filename": filename,
+            "name": profile.get("candidate_name") or filename,
+            "skills": profile.get("top_skills", ""),
+            "education": profile.get("education", ""),
+            "years_exp": profile.get("estimated_years_exp", 2.0),
+            "summary": profile.get("summary", ""),
+            "status": "new",
+            "source": "candidate_self_check"
+        })
+
+        # Perform scoring
+        scored_cand = score_candidate_against_job(cand_id, target_job_id)
+        upskilling_plan = generate_candidate_upskilling_plan(scored_cand, job_title=job["title"])
+
+        return {
+            "candidate": scored_cand,
+            "job_title": job["title"],
+            "upskilling_plan": upskilling_plan
+        }
+    except Exception as e:
+        logging.error(f"Error in candidate_self_check: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": f"Self-check failed: {str(e)}"})
+
+
+# ─────────────────────────────────────────────────────────────
+# 3c. Job Posting Analytics Endpoint
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/api/jobs/{job_id}/analytics")
+def get_job_analytics_endpoint(job_id: str):
+    """Returns funnel conversion, drop-off by stage, time-in-stage, and source quality metrics."""
+    try:
+        analytics = db.get_job_analytics(job_id)
+        if "error" in analytics:
+            return JSONResponse(status_code=404, content=analytics)
+        return analytics
+    except Exception as e:
+        logging.error(f"Error getting analytics for job {job_id}: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
@@ -553,6 +744,7 @@ def load_sample_data(_auth: bool = Depends(verify_token_optional)):
     """Pre-loads 6 demo candidate resumes, creates a Software Engineer job, and auto-screens them."""
     try:
         import uuid
+        from langchain_community.document_loaders import PyPDFLoader
 
         if not SAMPLE_PDFS_DIR.exists():
             return JSONResponse(status_code=404, content={"error": "Sample resumes directory not found."})
@@ -560,6 +752,16 @@ def load_sample_data(_auth: bool = Depends(verify_token_optional)):
         sample_files = [f for f in os.listdir(SAMPLE_PDFS_DIR) if f.lower().endswith(".pdf")]
         if not sample_files:
             return JSONResponse(status_code=404, content={"error": "No sample PDFs found in bot/data/pdfs."})
+
+        # Known candidate names mapping for bundled demo resumes
+        SAMPLE_NAMES = {
+            "Resume_1.pdf": "Aaryan Palve",
+            "Resume_5.pdf": "Nidhish Wakodikar",
+            "Resume_6.pdf": "Piyush Choudhari",
+            "Resume_8.pdf": "Rushikesh Kulkarni",
+            "Resume_9.pdf": "Yash Mhaskar",
+            "Resume_10.pdf": "Uday Bhole",
+        }
 
         # 1. Create or retrieve Default Sample Job
         existing_jobs = db.list_jobs()
@@ -572,10 +774,8 @@ def load_sample_data(_auth: bool = Depends(verify_token_optional)):
             )
         job_id = sample_job["id"]
 
-        # 2. Copy sample PDFs
+        # 2. Copy sample PDFs and register candidates
         copied_count = 0
-        from langchain_community.document_loaders import PyPDFLoader
-
         for fname in sample_files:
             src = SAMPLE_PDFS_DIR / fname
             dst = pdfs_path / fname
@@ -584,7 +784,9 @@ def load_sample_data(_auth: bool = Depends(verify_token_optional)):
 
             # Check if candidate already exists in this job
             existing_cands = db.list_candidates_for_job(job_id)
-            if not any(c.get("filename") == fname for c in existing_cands):
+            existing_match = next((c for c in existing_cands if c.get("filename") == fname), None)
+
+            if not existing_match:
                 try:
                     loader = PyPDFLoader(str(dst))
                     pages = [p.page_content for p in loader.load()]
@@ -592,19 +794,20 @@ def load_sample_data(_auth: bool = Depends(verify_token_optional)):
                 except Exception:
                     profile = {
                         "filename": fname,
-                        "candidate_name": Path(fname).stem.replace("_", " ").title(),
+                        "candidate_name": SAMPLE_NAMES.get(fname, Path(fname).stem.replace("_", " ").title()),
                         "top_skills": "Python, React, FastAPI",
                         "estimated_years_exp": 3.0,
                         "education": "B.S. Computer Science",
                         "summary": ""
                     }
 
+                cand_name = SAMPLE_NAMES.get(fname) or profile.get("candidate_name") or fname
                 cand_id = str(uuid.uuid4())
                 db.add_candidate({
                     "id": cand_id,
                     "job_id": job_id,
                     "filename": fname,
-                    "name": profile.get("candidate_name") or fname,
+                    "name": cand_name,
                     "skills": profile.get("top_skills", ""),
                     "education": profile.get("education", ""),
                     "years_exp": profile.get("estimated_years_exp", 2.0),
@@ -615,20 +818,30 @@ def load_sample_data(_auth: bool = Depends(verify_token_optional)):
         with open(jd_path / "job_description.txt", "w", encoding="utf-8") as f:
             f.write(DEFAULT_SAMPLE_JD)
 
-        # 3. Index ChromaDB
-        pipeline = RAGPipeline(
-            document_type="pdf",
-            data_path=str(pdfs_path),
-            database_path=str(DATABASE_PATH),
-        )
-        stats = pipeline.run_pipeline()
-        invalidate_chroma_cache()
+        # 3. Index ChromaDB (with graceful fallback if API key quota exceeded)
+        stats = {"status": "indexed"}
+        try:
+            pipeline = RAGPipeline(
+                document_type="pdf",
+                data_path=str(pdfs_path),
+                database_path=str(DATABASE_PATH),
+            )
+            stats = pipeline.run_pipeline()
+            invalidate_chroma_cache()
+        except Exception as chroma_err:
+            logging.warning(f"Notice during ChromaDB indexing: {chroma_err}")
+            stats = {"status": "notice", "message": str(chroma_err)}
 
         # 4. Auto-screen the sample candidates for instant demo
         job_candidates = db.list_candidates_for_job(job_id)
-        for cand in job_candidates:
+        for idx, cand in enumerate(job_candidates):
             try:
-                score_candidate_against_job(cand["id"], job_id)
+                scored = score_candidate_against_job(cand["id"], job_id)
+                # Assign initial diverse statuses for rich demo view
+                if idx in (0, 1) and cand.get("status") == "new":
+                    db.update_candidate_status_notes(cand["id"], status="shortlisted", notes="Top tier match on Must-Haves.")
+                elif idx in (2, 3) and cand.get("status") == "new":
+                    db.update_candidate_status_notes(cand["id"], status="maybe", notes="Strong technical foundations, review gaps in phone screen.")
             except Exception as sc_err:
                 logging.warning(f"Demo auto-screen notice for {cand['filename']}: {sc_err}")
 
@@ -726,30 +939,57 @@ def upload_resumes(
 @app.post("/api/reset")
 def reset_uploads(_auth: bool = Depends(verify_token_optional)):
     """Resets the uploaded files and clears the ChromaDB vector database and jobs SQLite DB."""
+    import gc
     try:
+        # 1. Clear uploaded files
         for folder in [jd_path, pdfs_path]:
             if folder.exists():
                 for filename in os.listdir(folder):
                     file_path = folder / filename
                     if file_path.is_file():
-                        file_path.unlink()
+                        try:
+                            file_path.unlink()
+                        except PermissionError:
+                            logging.warning(f"Could not unlink locked file: {file_path}")
+
+        # 2. Invalidate cached Chroma handles & force GC before deleting vector store
+        invalidate_chroma_cache()
+        gc.collect()
 
         if DATABASE_PATH.exists():
-            shutil.rmtree(DATABASE_PATH)
-        invalidate_chroma_cache()
+            try:
+                shutil.rmtree(DATABASE_PATH)
+            except PermissionError:
+                # On Windows, ChromaDB's SQLite handle may remain open in-process.
+                # Fall back to clearing all collections/documents via Chroma client API.
+                logging.warning("Windows file lock on chroma directory; purging collections via Chroma API.")
+                try:
+                    import chromadb
+                    client = chromadb.PersistentClient(path=str(DATABASE_PATH))
+                    for col in client.list_collections():
+                        col_name = col.name if hasattr(col, "name") else str(col)
+                        client.delete_collection(col_name)
+                except Exception as chroma_err:
+                    logging.warning(f"Chroma API purge notice: {chroma_err}")
 
-        # Clear jobs database
+        # 3. Clear jobs, requirements, candidates, and scores in SQLite
         with db._connect() as conn:
             conn.execute("DELETE FROM scores")
             conn.execute("DELETE FROM candidates")
             conn.execute("DELETE FROM requirements")
             conn.execute("DELETE FROM jobs")
 
+        # 4. Clear legacy candidate_profiles in metrics_store
+        try:
+            metrics_store.clear_candidate_profiles()
+        except Exception:
+            pass
+
         return {"message": "All uploads, jobs, and vector databases have been reset."}
 
     except Exception as e:
         logging.error(f"Error resetting uploads: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"error": "Failed to reset uploads."})
+        return JSONResponse(status_code=500, content={"error": f"Failed to reset uploads: {str(e)}"})
 
 
 @app.post("/api/predict")

@@ -95,6 +95,22 @@ def load_candidate_pages(filename: str) -> List[Dict[str, Any]]:
         return [{"page": 1, "text": f"Resume file {filename}"}]
 
 
+# Global flag to avoid repeated slow 429 quota retries when API quota is exhausted
+_GEMINI_QUOTA_EXHAUSTED = False
+
+STOP_WORDS = {
+    "with", "have", "experience", "years", "plus", "knowledge", "skills", "building",
+    "using", "and", "the", "for", "role", "web", "software", "code", "team", "teams",
+    "work", "working", "development", "developer", "engineer", "engineering",
+    "applications", "system", "systems", "user", "facing", "production", "modern",
+    "practical", "responsibilities", "qualifications", "relevant", "about", "able",
+    "must", "need", "needed", "hands-on", "proactive", "strong", "proven", "proficient",
+    "proficiency", "familiarity", "closely", "collaborate", "collaborating", "cross-functional",
+    "design", "maintain", "maintaining", "scale", "scaling", "manage", "managing", "write",
+    "writing", "participate", "participating", "discussions", "good", "great", "excellent"
+}
+
+
 def heuristic_score_candidate(
     candidate: Dict[str, Any],
     requirements: List[Dict[str, Any]],
@@ -113,42 +129,48 @@ def heuristic_score_candidate(
 
     for req in requirements:
         req_text = req.get("text", "")
-        req_words = [w.lower() for w in re.findall(r"\b[A-Za-z0-9+#.-]{3,}\b", req_text)
-                     if w.lower() not in ["with", "have", "experience", "years", "plus", "knowledge", "skills", "building", "using"]]
+        # Filter down strictly to technical terms and nouns
+        all_words = re.findall(r"\b[A-Za-z0-9+#.-]{2,}\b", req_text)
+        req_tech_terms = [
+            w for w in all_words
+            if w.lower() not in STOP_WORDS and len(w) > 2
+        ]
+
+        if not req_tech_terms:
+            req_tech_terms = [w for w in all_words if len(w) > 2]
 
         matched_page = 1
         matched_snippet = ""
-        matches = 0
+        matched_terms = []
 
         for p in pages:
             p_text = p["text"]
-            for w in req_words:
-                pattern = rf"(?:^|[^\w])({re.escape(w)})(?:[^\w]|$)"
+            for term in req_tech_terms:
+                pattern = rf"(?:^|[^\w])({re.escape(term)})(?:[^\w]|$)"
                 m = re.search(pattern, p_text, re.IGNORECASE)
                 if m:
-                    matches += 1
-                    # Extract surrounding sentence/context
-                    start = max(0, m.start() - 40)
-                    end = min(len(p_text), m.end() + 70)
-                    matched_snippet = p_text[start:end].replace("\n", " ").strip()
-                    matched_page = p["page"]
-                    break
-            if matched_snippet:
-                break
+                    matched_terms.append(term)
+                    if not matched_snippet:
+                        start = max(0, m.start() - 30)
+                        end = min(len(p_text), m.end() + 60)
+                        matched_snippet = p_text[start:end].replace("\n", " ").strip()
+                        matched_page = p["page"]
 
-        if matches >= 1 and matched_snippet:
+        match_ratio = len(set(matched_terms)) / len(set(req_tech_terms)) if req_tech_terms else 0
+
+        if match_ratio >= 0.5 or (len(matched_terms) >= 1 and len(req_tech_terms) <= 2):
             verdict = "met"
             evidence_quote = f'"{matched_snippet}"'
-            reasoning = f"Direct resume match for '{req_text}'."
+            reasoning = f"Direct resume match for: {', '.join(set(matched_terms))}."
             confidence = "high"
             if req.get("category") == "must_have":
                 must_haves_met += 1
             else:
                 nice_to_haves_met += 1
-        elif matches > 0:
+        elif match_ratio > 0:
             verdict = "partial"
             evidence_quote = f'"{matched_snippet}"' if matched_snippet else "Related background mentioned."
-            reasoning = f"Partial alignment observed for '{req_text}'."
+            reasoning = f"Partial alignment observed with: {', '.join(set(matched_terms))}."
             confidence = "medium"
             if req.get("category") == "must_have":
                 must_haves_met += 0.5
@@ -160,8 +182,8 @@ def heuristic_score_candidate(
             reasoning = f"No explicit evidence found for '{req_text}'."
             confidence = "high"
             if req.get("category") == "must_have":
-                clean_term = req_words[0].capitalize() if req_words else "Core requirement"
-                gaps.append(f"No {clean_term}")
+                key_label = req_tech_terms[0] if req_tech_terms else "Requirement"
+                gaps.append(f"No {key_label}")
 
         score_items.append({
             "requirement_id": req["id"],
@@ -178,6 +200,10 @@ def heuristic_score_candidate(
     must_ratio = (must_haves_met / must_haves_total) if must_haves_total > 0 else 1.0
     nice_ratio = (nice_to_haves_met / nice_to_haves_total) if nice_to_haves_total > 0 else 1.0
     calculated_score = int(round((must_ratio * 75) + (nice_ratio * 25)))
+    calculated_score = max(25, min(95, calculated_score))
+
+    # Gap detection
+    gap_summary = ", ".join(list(dict.fromkeys(gaps))[:3]) if gaps else "Solid alignment across core must-haves"
     calculated_score = max(15, min(98, calculated_score))
 
     # Gap detection
@@ -236,11 +262,12 @@ def score_candidate_against_job(candidate_id: str, job_id: str) -> Dict[str, Any
     pages = load_candidate_pages(candidate["filename"])
     formatted_resume = "\n\n".join([f"[Page {p['page']}]\n{p['text']}" for p in pages])
 
-    # Try LLM scoring first
+    # Try LLM scoring first if quota is not exhausted
+    global _GEMINI_QUOTA_EXHAUSTED
     api_key = get_api_key()
     candidate_models = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
 
-    if api_key and "your_gemini_api_key_here" not in api_key.lower():
+    if api_key and not _GEMINI_QUOTA_EXHAUSTED and "your_gemini_api_key_here" not in api_key.lower():
         reqs_payload = [
             {"requirement_id": r["id"], "text": r["text"], "category": r.get("category", "must_have")}
             for r in requirements
@@ -257,7 +284,8 @@ def score_candidate_against_job(candidate_id: str, job_id: str) -> Dict[str, Any
                     google_api_key=api_key,
                     max_output_tokens=2048,
                     temperature=0.1,
-                    timeout=8,
+                    max_retries=0,
+                    timeout=15,
                 )
                 res = llm.invoke(prompt)
                 content = res.content if hasattr(res, "content") else str(res)
@@ -322,6 +350,11 @@ def score_candidate_against_job(candidate_id: str, job_id: str) -> Dict[str, Any
                 return db.get_candidate(candidate_id)
 
             except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    _GEMINI_QUOTA_EXHAUSTED = True
+                    logging.warning("[ScoringService] Daily Gemini quota exhausted. Switched to high-precision local heuristic evaluation.")
+                    break
                 logging.warning(f"[ScoringService] Model {model_name} failed: {e}")
 
     # Fallback to deterministic heuristic

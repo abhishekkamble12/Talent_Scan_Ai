@@ -1,16 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
-import ResumeUploader from "./ResumeUploader";
-import LLMQueryComponent from "./LLMQueryComponent";
 import AIOpsDashboard from "./AIOpsDashboard";
-import CandidatePool from "./components/CandidatePool";
 import WorkspaceSettings from "./components/WorkspaceSettings";
 import CommandPalette from "./components/CommandPalette";
 import LandingView from "./components/LandingView";
+import CandidatesView from "./views/CandidatesView";
+import JobSetup from "./views/JobSetup";
+import { SharedScorecardView } from "./views/SharedScorecardView";
+import { CandidateSelfCheckView } from "./views/CandidateSelfCheckView";
 import { Badge } from "./components/ui";
 import {
-  Database,
-  RefreshCw,
   Sparkles,
   Activity,
   X,
@@ -18,50 +17,43 @@ import {
   AlertCircle,
   Menu,
   ChevronRight,
+  ChevronDown,
+  Briefcase,
   Users,
-  FileText,
   Settings,
-  Layout,
-  Command,
-  CheckCircle2,
-  Circle,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Home,
+  Sun,
+  Moon,
 } from "lucide-react";
 
 import { BACKEND_URL } from "./api/client";
-
-let supportsDisplayTransition;
-function canTransitionDisplay() {
-  if (supportsDisplayTransition !== undefined) return supportsDisplayTransition;
-  if (!window.CSS?.supports?.("transition-behavior", "allow-discrete") || !document.body) {
-    return false;
-  }
-  const probe = document.createElement("div");
-  probe.style.cssText = "transition: display 1s allow-discrete !important; display: block;";
-  document.body.appendChild(probe);
-  getComputedStyle(probe).display;
-  probe.style.display = "none";
-  supportsDisplayTransition = getComputedStyle(probe).display === "block";
-  probe.remove();
-  return supportsDisplayTransition;
-}
-
-function supportsTopLayerExit() {
-  return window.CSS?.supports?.("overlay", "auto") && canTransitionDisplay();
-}
 
 const NAV_ITEMS = [
   {
     group: "Workspace",
     items: [
       {
-        id: "app",
-        label: "Candidate Screening",
-        icon: Sparkles,
+        id: "home",
+        label: "Home",
+        icon: Home,
       },
       {
-        id: "pool",
-        label: "Candidate Pool",
+        id: "candidates",
+        label: "Candidate Screening",
         icon: Users,
+      },
+      {
+        id: "jobs",
+        label: "Job Openings",
+        icon: Briefcase,
+      },
+      {
+        id: "self-check",
+        label: "Candidate Self-Check",
+        icon: Sparkles,
       },
     ],
   },
@@ -70,7 +62,7 @@ const NAV_ITEMS = [
     items: [
       {
         id: "aiops",
-        label: "AI Performance & Ops",
+        label: "Insights & Performance",
         icon: Activity,
       },
     ],
@@ -83,11 +75,6 @@ const NAV_ITEMS = [
         label: "Workspace Settings",
         icon: Settings,
       },
-      {
-        id: "landing",
-        label: "Homepage",
-        icon: Layout,
-      },
     ],
   },
 ];
@@ -96,46 +83,63 @@ const App = () => {
   const [status, setStatus] = useState({
     online: false,
     resumes_count: 0,
-    resumes: [],
-    has_job_description: false,
-    job_description_full: "",
     api_key_configured: false,
+    jobs_count: 0,
   });
   const [checkingStatus, setCheckingStatus] = useState(false);
   const [loadingSample, setLoadingSample] = useState(false);
-  const [activeTab, setActiveTab] = useState("landing"); // "landing" | "app" | "pool" | "aiops" | "settings"
+  const [activeTab, setActiveTab] = useState("home"); // "home" | "candidates" | "jobs" | "job-create" | "self-check" | "aiops" | "settings"
+  const [shareToken, setShareToken] = useState(() => {
+    return new URLSearchParams(window.location.search).get("share");
+  });
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem("talentscan_theme") || "dark";
+  });
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
-  const [externalPrompt, setExternalPrompt] = useState("");
-  const [hasScreened, setHasScreened] = useState(() => {
-    return localStorage.getItem("talentscan_has_screened") === "true";
-  });
-  const [showChecklist, setShowChecklist] = useState(() => {
-    return localStorage.getItem("talentscan_dismiss_checklist") !== "true";
-  });
 
-  const dismissChecklist = () => {
-    setShowChecklist(false);
-    localStorage.setItem("talentscan_dismiss_checklist", "true");
-  };
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("talentscan_theme", theme);
+  }, [theme]);
 
-  const handleQuerySuccess = () => {
-    setHasScreened(true);
-    localStorage.setItem("talentscan_has_screened", "true");
-  };
+  const toggleTheme = () => setTheme((prev) => (prev === "dark" ? "light" : "dark"));
 
-  const fetchStatus = async () => {
+  // Job management state
+  const [jobs, setJobs] = useState([]);
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [jobDropdownOpen, setJobDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  const fetchJobs = useCallback(async () => {
+    try {
+      const res = await axios.get(`${BACKEND_URL}/api/jobs`);
+      const fetchedJobs = res.data.jobs || [];
+      setJobs(fetchedJobs);
+
+      // If no active job or active job deleted, select the first
+      setActiveJobId((current) => {
+        if (current && fetchedJobs.some((j) => j.id === current)) {
+          return current;
+        }
+        return fetchedJobs.length > 0 ? fetchedJobs[0].id : null;
+      });
+    } catch (err) {
+      console.warn("Failed fetching jobs list:", err);
+    }
+  }, []);
+
+  const fetchStatus = useCallback(async () => {
     setCheckingStatus(true);
     try {
       const res = await axios.get(`${BACKEND_URL}/api/status`, { timeout: 3000 });
       setStatus({
         online: true,
         resumes_count: res.data.resumes_count || 0,
-        resumes: res.data.resumes || [],
-        has_job_description: res.data.has_job_description || false,
-        job_description_full: res.data.job_description_full || "",
         api_key_configured: res.data.api_key_configured || false,
+        jobs_count: res.data.jobs_count || 0,
       });
+      await fetchJobs();
     } catch {
       setStatus((prev) => ({
         ...prev,
@@ -144,34 +148,44 @@ const App = () => {
     } finally {
       setCheckingStatus(false);
     }
-  };
+  }, [fetchJobs]);
 
-  const handleLoadSampleFromShell = async () => {
+  const handleLoadSampleDemo = async () => {
     setLoadingSample(true);
     try {
-      await axios.post(`${BACKEND_URL}/api/load-sample`);
+      const res = await axios.post(`${BACKEND_URL}/api/load-sample`);
+      if (res.data.job) {
+        setActiveJobId(res.data.job.id);
+      }
       await fetchStatus();
-    } catch {
-      // Handled by offline/status indicators
+      setActiveTab("candidates");
+    } catch (err) {
+      console.error("Failed loading sample demo:", err);
     } finally {
       setLoadingSample(false);
     }
   };
 
-  const handleScreenCandidate = (filename, candidateName) => {
-    const label = candidateName ? `${candidateName} (${filename})` : filename;
-    setExternalPrompt(
-      `Summarize the strengths, relevant experience, and overall fit of ${label} for this job description.`
-    );
-    setActiveTab("app");
+  const handleDeleteJob = async (jobId, e) => {
+    e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this job workspace? All associated candidate scores will be removed.")) {
+      return;
+    }
+    try {
+      await axios.delete(`${BACKEND_URL}/api/jobs/${jobId}`);
+      await fetchJobs();
+    } catch (err) {
+      console.error("Delete job error:", err);
+    }
   };
 
   useEffect(() => {
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
+    const interval = setInterval(fetchStatus, 20000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchStatus]);
 
+  // Keyboard shortcut listener
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -179,132 +193,69 @@ const App = () => {
         setCommandOpen((prev) => !prev);
       } else if (e.key === "Escape") {
         setMobileNavOpen(false);
+        setJobDropdownOpen(false);
       }
     };
     window.addEventListener("keydown", handleGlobalKeyDown);
     return () => window.removeEventListener("keydown", handleGlobalKeyDown);
   }, []);
 
-  const activeNav = NAV_ITEMS.flatMap((g) => g.items).find((i) => i.id === activeTab);
-  const drawerRef = useRef(null);
-
-  const closeMobileDrawer = useCallback(async () => {
-    const dialog = drawerRef.current;
-    if (!dialog || !dialog.open) {
-      setMobileNavOpen(false);
-      return;
-    }
-
-    if (!supportsTopLayerExit()) {
-      dialog.setAttribute("data-closing", "");
-      const animations = dialog.getAnimations({ subtree: true });
-      if (animations.length > 0) {
-        await Promise.race([
-          Promise.allSettled(animations.map((a) => a.finished)),
-          new Promise((r) => setTimeout(r, 350)),
-        ]);
-      }
-      if (!dialog.hasAttribute("data-closing")) return;
-      dialog.removeAttribute("data-closing");
-    }
-
-    dialog.close();
-    setMobileNavOpen(false);
-  }, []);
-
-  const openMobileDrawer = useCallback(() => {
-    const dialog = drawerRef.current;
-    if (!dialog) return;
-    setMobileNavOpen(true);
-    if (!dialog.open) {
-      dialog.removeAttribute("data-closing");
-      dialog.showModal();
-    }
-  }, []);
-
-  const handleSelectTab = (id) => {
-    closeMobileDrawer();
-    if (activeTab === id) return;
-
-    if (!document.startViewTransition || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setActiveTab(id);
-      return;
-    }
-
-    const transition = document.startViewTransition(() => {
-      setActiveTab(id);
-    });
-
-    transition.finished.finally(() => {
-      const heading = document.querySelector("#main-content h1, #main-content [tabindex='-1']");
-      heading?.focus?.();
-    });
-  };
-
+  // Close job dropdown on outside click
   useEffect(() => {
-    const dialog = drawerRef.current;
-    if (!dialog) return;
-
-    const handleClose = () => {
-      dialog.removeAttribute("data-closing");
-      setMobileNavOpen(false);
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setJobDropdownOpen(false);
+      }
     };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
-    const handleCancel = (e) => {
-      e.preventDefault();
-      closeMobileDrawer();
-    };
+  const activeJob = jobs.find((j) => j.id === activeJobId) || jobs[0] || null;
+  const activeNav = NAV_ITEMS.flatMap((g) => g.items).find((i) => i.id === activeTab);
 
-    dialog.addEventListener("close", handleClose);
-    dialog.addEventListener("cancel", handleCancel);
+  if (shareToken) {
+    return (
+      <SharedScorecardView
+        token={shareToken}
+        onBackToApp={() => {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("share");
+          window.history.replaceState({}, "", url.pathname);
+          setShareToken(null);
+        }}
+      />
+    );
+  }
 
-    let cleanupPointer = null;
-    if (!("closedBy" in HTMLDialogElement.prototype)) {
-      const outside = (e) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-      };
-      let pressedOutside = false;
-      const onPointerDown = (e) => {
-        pressedOutside = outside(e);
-      };
-      const onPointerUp = (e) => {
-        if (pressedOutside && outside(e)) {
-          closeMobileDrawer();
-        }
-      };
-      dialog.addEventListener("pointerdown", onPointerDown);
-      dialog.addEventListener("pointerup", onPointerUp);
-      cleanupPointer = () => {
-        dialog.removeEventListener("pointerdown", onPointerDown);
-        dialog.removeEventListener("pointerup", onPointerUp);
-      };
-    }
+  if (activeTab === "home") {
+    return (
+      <>
+        <CommandPalette
+          isOpen={commandOpen}
+          onClose={() => setCommandOpen(false)}
+          onNavigate={(tab) => {
+            if (tab === "app" || tab === "pool") setActiveTab("candidates");
+            else if (tab === "landing") setActiveTab("home");
+            else setActiveTab(tab);
+          }}
+          onLoadSample={handleLoadSampleDemo}
+          onRefreshStatus={fetchStatus}
+        />
+        <LandingView
+          status={status}
+          onNavigate={(tab) => setActiveTab(tab === "app" ? "candidates" : tab)}
+          onOpenCommandPalette={() => setCommandOpen(true)}
+          onLoadSample={handleLoadSampleDemo}
+          loadingSample={loadingSample}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+      </>
+    );
+  }
 
-    return () => {
-      dialog.removeEventListener("close", handleClose);
-      dialog.removeEventListener("cancel", handleCancel);
-      cleanupPointer?.();
-    };
-  }, [closeMobileDrawer]);
-
-  const checklistSteps = [
-    {
-      label: "Connect Gemini API",
-      done: status.api_key_configured,
-    },
-    {
-      label: "Index Resumes & Role",
-      done: status.has_job_description && status.resumes_count > 0,
-    },
-    {
-      label: "Run AI Screening",
-      done: hasScreened,
-    },
-  ];
-  const completedCount = checklistSteps.filter((s) => s.done).length;
-
-  const SidebarContent = ({ isDrawer = false }) => (
+  const SidebarContent = () => (
     <div className="flex flex-col h-full bg-surface border-r border-subtle">
       {/* Brand Header */}
       <div className="h-14 px-4 flex items-center justify-between border-b border-subtle flex-shrink-0">
@@ -314,19 +265,9 @@ const App = () => {
           </div>
           <div className="min-w-0">
             <div className="text-sm font-semibold tracking-tight text-primary truncate">TalentScan AI</div>
-            <div className="text-[11px] font-mono text-tertiary truncate">Recruiting Suite</div>
+            <div className="text-[11px] font-mono text-tertiary truncate">Auditable Screening</div>
           </div>
         </div>
-        {isDrawer && (
-          <button
-            onClick={closeMobileDrawer}
-            className="p-1 rounded text-tertiary hover:text-primary hover:bg-elevated focus-ring"
-            aria-label="Close navigation menu"
-            autoFocus
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
       </div>
 
       {/* Navigation Groups */}
@@ -344,24 +285,22 @@ const App = () => {
                   <button
                     key={item.id}
                     type="button"
-                    id={`nav-${item.id}`}
-                    aria-current={isActive ? "page" : undefined}
-                    onClick={() => handleSelectTab(item.id)}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setMobileNavOpen(false);
+                    }}
                     className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left transition-colors focus-ring ${
                       isActive
-                        ? "bg-elevated text-primary border border-subtle"
+                        ? "bg-elevated text-primary border border-subtle font-medium"
                         : "text-secondary hover:text-primary hover:bg-elevated/50 border border-transparent"
                     }`}
                   >
                     <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "text-accent" : "text-tertiary"}`} />
                     <span className="text-xs font-medium truncate flex-1">{item.label}</span>
-                    {item.id === "pool" && status.resumes_count > 0 && (
+                    {item.id === "jobs" && jobs.length > 0 && (
                       <span className="text-[11px] font-mono text-tertiary tabular-nums">
-                        {status.resumes_count}
+                        {jobs.length}
                       </span>
-                    )}
-                    {item.id === "aiops" && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" title="Live Telemetry" />
                     )}
                   </button>
                 );
@@ -371,69 +310,30 @@ const App = () => {
         ))}
       </nav>
 
-      {/* System Health & Telemetry Card */}
+      {/* 1-Click Demo Shortcut */}
       <div className="p-3 border-t border-subtle bg-root/40 flex-shrink-0">
-        <div className="p-3 rounded-md bg-elevated/60 border border-subtle space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-tertiary">System Status</span>
-            <button
-              onClick={fetchStatus}
-              disabled={checkingStatus}
-              className="p-1 rounded text-tertiary hover:text-primary hover:bg-overlay transition focus-ring"
-              title="Sync system status"
-              aria-label="Sync system status"
-            >
-              <RefreshCw className={`w-3 h-3 ${checkingStatus ? "animate-spin text-accent" : ""}`} />
-            </button>
-          </div>
+        <button
+          type="button"
+          onClick={handleLoadSampleDemo}
+          disabled={loadingSample}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-accent-tint hover:bg-accent-tint/80 border border-accent-border text-accent text-xs font-semibold transition interactive-button focus-ring"
+        >
+          <Sparkles className={`w-3.5 h-3.5 ${loadingSample ? "animate-spin" : ""}`} />
+          <span>{loadingSample ? "Loading Demo…" : "1-Click Demo Seed"}</span>
+        </button>
+      </div>
 
-          <div className="space-y-1.5 text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-secondary">Backend API</span>
-              <Badge variant={status.online ? "success" : "error"} dot>
-                {status.online ? "Online" : "Offline"}
-              </Badge>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-secondary">Indexed Pool</span>
-              <span className="font-mono text-xs text-primary tabular-nums">
-                {status.resumes_count} {status.resumes_count === 1 ? "resume" : "resumes"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-secondary">Gemini Auth</span>
-              <span
-                className={`font-mono text-[11px] ${
-                  status.api_key_configured ? "text-accent" : "text-status-warning"
-                }`}
-              >
-                {status.api_key_configured ? "Configured" : "Key Needed"}
-              </span>
-            </div>
-          </div>
+      {/* System Status Card */}
+      <div className="p-3 border-t border-subtle bg-root/40 flex-shrink-0 text-xs">
+        <div className="flex items-center justify-between text-secondary">
+          <span>Backend API</span>
+          <Badge variant={status.online ? "success" : "error"} dot>
+            {status.online ? "Online" : "Offline"}
+          </Badge>
         </div>
       </div>
     </div>
   );
-
-  if (activeTab === "landing") {
-    return (
-      <>
-        <CommandPalette
-          isOpen={commandOpen}
-          onClose={() => setCommandOpen(false)}
-          onNavigate={handleSelectTab}
-          onLoadSample={handleLoadSampleFromShell}
-          onRefreshStatus={fetchStatus}
-        />
-        <LandingView
-          status={status}
-          onNavigate={handleSelectTab}
-          onOpenCommandPalette={() => setCommandOpen(true)}
-        />
-      </>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-root text-primary flex font-sans selection:bg-accent-tint selection:text-accent">
@@ -441,8 +341,11 @@ const App = () => {
       <CommandPalette
         isOpen={commandOpen}
         onClose={() => setCommandOpen(false)}
-        onNavigate={handleSelectTab}
-        onLoadSample={handleLoadSampleFromShell}
+        onNavigate={(tab) => {
+          if (tab === "app" || tab === "pool") setActiveTab("candidates");
+          else setActiveTab(tab);
+        }}
+        onLoadSample={handleLoadSampleDemo}
         onRefreshStatus={fetchStatus}
       />
 
@@ -451,198 +354,248 @@ const App = () => {
         <SidebarContent />
       </aside>
 
-      {/* Mobile Slide-over Drawer Dialog */}
-      <dialog
-        id="mobile-drawer"
-        ref={drawerRef}
-        {...{ closedby: "any" }}
-        aria-label="Navigation drawer"
-        className="drawer-dialog lg:hidden"
-      >
-        <div className="w-64 max-w-[80vw] h-full shadow-2xl">
-          <SidebarContent isDrawer />
+      {/* Mobile Drawer */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden flex">
+          <div className="fixed inset-0 bg-black/60" onClick={() => setMobileNavOpen(false)} />
+          <div className="relative w-64 max-w-[80vw] h-full shadow-2xl z-10">
+            <SidebarContent />
+          </div>
         </div>
-      </dialog>
+      )}
 
-      {/* Main Workspace Column */}
+      {/* Main Column */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Context Bar */}
+        {/* Top Header Bar with Role Switcher */}
         <header className="h-14 border-b border-subtle bg-surface/90 backdrop-blur-sm sticky top-0 z-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <button
-              id="mobile-drawer-open"
-              aria-expanded={mobileNavOpen}
-              aria-controls="mobile-drawer"
-              onClick={openMobileDrawer}
+              onClick={() => setMobileNavOpen(true)}
               className="lg:hidden p-1.5 rounded-md text-secondary hover:text-primary hover:bg-elevated border border-subtle focus-ring"
-              aria-label="Open navigation menu"
+              aria-label="Open menu"
             >
               <Menu className="w-4 h-4" />
             </button>
 
-            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs min-w-0">
-              <span className="text-tertiary hidden sm:inline">Workspace</span>
-              <ChevronRight className="w-3.5 h-3.5 text-tertiary hidden sm:inline flex-shrink-0" />
-              <span className="font-semibold text-primary truncate">{activeNav?.label}</span>
-            </nav>
+            {/* Active Job Switcher Dropdown */}
+            <div className="relative" ref={dropdownRef}>
+              <button
+                type="button"
+                onClick={() => setJobDropdownOpen((p) => !p)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-elevated hover:bg-overlay border border-subtle text-xs font-semibold text-primary transition focus-ring"
+              >
+                <Briefcase className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+                <span className="truncate max-w-[200px] sm:max-w-xs">
+                  {activeJob ? activeJob.title : "Select or Create Job"}
+                </span>
+                <ChevronDown className="w-3 h-3 text-tertiary flex-shrink-0" />
+              </button>
+
+              {/* Dropdown Menu */}
+              {jobDropdownOpen && (
+                <div className="absolute left-0 mt-1.5 w-72 rounded-lg bg-surface border border-subtle shadow-2xl z-50 py-1 divide-y divide-subtle animate-in fade-in-50 zoom-in-95">
+                  <div className="max-h-60 overflow-y-auto py-1">
+                    {jobs.map((j) => (
+                      <button
+                        key={j.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveJobId(j.id);
+                          setJobDropdownOpen(false);
+                          setActiveTab("candidates");
+                        }}
+                        className={`w-full px-3 py-2 text-left flex items-center justify-between gap-2 hover:bg-elevated transition text-xs ${
+                          j.id === activeJobId ? "bg-accent-tint/30 text-accent font-semibold" : "text-primary"
+                        }`}
+                      >
+                        <span className="truncate">{j.title}</span>
+                        <span className="text-micro font-mono text-tertiary flex-shrink-0">
+                          {j.candidates_count} cand
+                        </span>
+                      </button>
+                    ))}
+                    {jobs.length === 0 && (
+                      <div className="p-3 text-center text-xs text-tertiary italic">
+                        No active jobs created
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJobDropdownOpen(false);
+                        setActiveTab("job-create");
+                      }}
+                      className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md bg-accent text-root font-semibold text-xs transition interactive-button"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>+ Create New Job</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
               type="button"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              className="p-1.5 rounded-md bg-elevated hover:bg-overlay border border-subtle text-secondary hover:text-primary transition focus-ring"
+            >
+              {theme === "dark" ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              type="button"
               onClick={() => setCommandOpen(true)}
               className="hidden sm:inline-flex items-center gap-2 px-2.5 py-1 rounded bg-elevated hover:bg-overlay border border-subtle text-micro text-secondary hover:text-primary transition focus-ring"
-              title="Open Command Palette (Ctrl+K)"
             >
-              <Command className="w-3 h-3 text-tertiary" />
               <span>Quick Jump</span>
               <kbd className="font-mono text-[10px] text-tertiary bg-root px-1 rounded border border-subtle">
                 Ctrl+K
               </kbd>
             </button>
-
-            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded bg-elevated border border-subtle text-micro font-mono text-secondary">
-              <Database className="w-3 h-3 text-accent" />
-              <span className="tabular-nums text-primary font-medium">{status.resumes_count}</span>
-              <span>Candidates</span>
-            </div>
-            <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded bg-elevated border border-subtle text-micro font-mono text-secondary">
-              <FileText className={`w-3 h-3 ${status.has_job_description ? "text-accent" : "text-tertiary"}`} />
-              <span>{status.has_job_description ? "Role Criteria Set" : "No Role Criteria"}</span>
-            </div>
-            <Badge variant={status.online ? "success" : "error"} dot className="lg:hidden">
-              {status.online ? "Online" : "Offline"}
-            </Badge>
           </div>
         </header>
 
-        {/* Activation Checklist Banner */}
-        {showChecklist && activeTab === "app" && (
-          <div className="border-b border-subtle bg-surface/60 text-xs text-secondary">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-3 sm:gap-5">
-                <span className="text-micro font-mono uppercase tracking-wider text-accent">
-                  Setup ({completedCount}/3)
-                </span>
-                {checklistSteps.map((step, i) => (
-                  <div key={i} className="inline-flex items-center gap-1.5">
-                    {step.done ? (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-accent flex-shrink-0" />
-                    ) : (
-                      <Circle className="w-3.5 h-3.5 text-tertiary flex-shrink-0" />
-                    )}
-                    <span className={step.done ? "text-primary font-medium" : "text-secondary"}>
-                      {step.label}
-                    </span>
+        {/* Offline Diagnostic Banner */}
+        {!status.online && (
+          <div className="border-b border-rose-500/30 bg-rose-500/10 text-rose-400 text-xs px-4 py-2.5 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>Backend API is currently offline. Ensure `python backend/app.py` is running on port 5000.</span>
+            </div>
+            <button
+              onClick={fetchStatus}
+              className="px-2.5 py-1 rounded bg-rose-500 text-root font-semibold text-xs"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Main Workspace Area */}
+        <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
+          {activeTab === "candidates" && (
+            <CandidatesView
+              job={activeJob}
+              onJobUpdated={(updated) => {
+                setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
+              }}
+              onOpenCreateJob={() => setActiveTab("job-create")}
+              onTriggerDemoSeed={handleLoadSampleDemo}
+            />
+          )}
+
+          {activeTab === "job-create" && (
+            <JobSetup
+              onJobCreated={(newJob) => {
+                setJobs((prev) => [newJob, ...prev]);
+                setActiveJobId(newJob.id);
+                setActiveTab("candidates");
+              }}
+              onCancel={() => setActiveTab("candidates")}
+            />
+          )}
+
+          {activeTab === "self-check" && (
+            <CandidateSelfCheckView
+              onBackToHome={() => setActiveTab("home")}
+              initialJobId={activeJobId}
+            />
+          )}
+
+          {activeTab === "jobs" && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-xl font-bold text-primary tracking-tight">Job Openings</h1>
+                  <p className="text-xs text-secondary mt-0.5">
+                    Manage role workspaces, requirement criteria, and candidate applicant pools.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("job-create")}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-accent hover:bg-accent-hover text-root font-semibold text-xs transition interactive-button focus-ring"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create Job</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {jobs.map((j) => (
+                  <div
+                    key={j.id}
+                    onClick={() => {
+                      setActiveJobId(j.id);
+                      setActiveTab("candidates");
+                    }}
+                    className={`p-5 rounded-lg bg-surface border transition cursor-pointer hover:border-accent/60 shadow-xs space-y-3 ${
+                      j.id === activeJobId ? "border-accent ring-1 ring-accent" : "border-subtle"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-primary truncate">{j.title}</h3>
+                        <p className="text-micro text-tertiary font-mono mt-0.5">
+                          Created {new Date(j.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteJob(j.id, e)}
+                        className="p-1 rounded text-tertiary hover:text-rose-400 transition"
+                        title="Delete Job"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <p className="text-xs text-secondary line-clamp-2 leading-relaxed">
+                      {j.description}
+                    </p>
+
+                    <div className="pt-2 border-t border-subtle flex items-center justify-between text-xs">
+                      <span className="font-mono text-tertiary">
+                        {j.requirements?.length || 0} criteria chips
+                      </span>
+                      <Badge variant="accent">
+                        {j.candidates_count || 0} candidates
+                      </Badge>
+                    </div>
                   </div>
                 ))}
               </div>
-              <button
-                onClick={dismissChecklist}
-                className="text-tertiary hover:text-primary p-1 rounded focus-ring flex-shrink-0"
-                title="Dismiss checklist"
-                aria-label="Dismiss checklist"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
             </div>
-          </div>
-        )}
-
-        {/* Offline Diagnostic Banner */}
-        {!status.online && (
-          <div className="border-b border-status-error-border bg-status-error-bg text-status-error text-xs">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>
-                  Backend service is unreachable. Start the API server with{" "}
-                  <code className="font-mono text-primary bg-elevated px-1.5 py-0.5 rounded border border-subtle">
-                    python backend/app.py
-                  </code>{" "}
-                  or{" "}
-                  <code className="font-mono text-primary bg-elevated px-1.5 py-0.5 rounded border border-subtle">
-                    .\start_project.bat
-                  </code>
-                </span>
-              </div>
-              <button
-                onClick={fetchStatus}
-                className="px-3 py-1 rounded bg-status-error text-root font-semibold text-xs hover:opacity-90 transition focus-ring"
-              >
-                Retry Connection
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Main View Area */}
-        <main id="main-content" className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 main-view-transition">
-          {activeTab === "app" && (
-            <section
-              id="view-app"
-              aria-labelledby="heading-app"
-              className="space-y-5"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <h1 id="heading-app" tabIndex={-1} className="text-xl font-semibold text-primary tracking-tight outline-none">
-                    Candidate Screening
-                  </h1>
-                  <p className="text-xs text-secondary mt-0.5">
-                    Index candidate resumes against your job description and run AI-assisted evaluations.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                <div className="lg:col-span-5">
-                  <ResumeUploader onDataUpdated={fetchStatus} currentStatus={status} />
-                </div>
-                <div className="lg:col-span-7">
-                  <LLMQueryComponent
-                    currentStatus={status}
-                    externalPrompt={externalPrompt}
-                    onExternalPromptHandled={() => setExternalPrompt("")}
-                    onQuerySuccess={handleQuerySuccess}
-                  />
-                </div>
-              </div>
-            </section>
-          )}
-
-          {activeTab === "pool" && (
-            <section id="view-pool" aria-label="Candidate Pool">
-              <CandidatePool
-                resumes={status.resumes}
-                hasJobDescription={status.has_job_description}
-                onScreenCandidate={handleScreenCandidate}
-                onNavigateToScreening={() => handleSelectTab("app")}
-                onLoadSample={handleLoadSampleFromShell}
-                loadingSample={loadingSample}
-                onDataUpdated={fetchStatus}
-              />
-            </section>
           )}
 
           {activeTab === "aiops" && (
-            <section id="view-aiops" aria-label="AI Performance & Observability">
+            <section aria-label="AIOps Performance and Telemetry">
+              <div className="mb-4">
+                <h1 className="text-xl font-bold text-primary tracking-tight">Engineering Insights &amp; Performance</h1>
+                <p className="text-xs text-secondary mt-0.5">
+                  Real-time telemetry, RAG latencies, similarity distributions, token costs, and automated LLM evaluators.
+                </p>
+              </div>
               <AIOpsDashboard />
             </section>
           )}
 
           {activeTab === "settings" && (
-            <section id="view-settings" aria-label="Workspace Settings">
-              <WorkspaceSettings status={status} onRefreshStatus={fetchStatus} />
-            </section>
+            <WorkspaceSettings status={status} onRefreshStatus={fetchStatus} />
           )}
         </main>
 
-        {/* Minimal SaaS Footer */}
-        <footer className="border-t border-subtle bg-surface/50 py-3.5 px-4 sm:px-6 lg:px-8 text-micro text-tertiary">
+        {/* Footer */}
+        <footer className="border-t border-subtle bg-surface/50 py-3 px-4 sm:px-6 lg:px-8 text-micro text-tertiary mt-auto">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-            <span>TalentScan AI · RAG Candidate Intelligence</span>
-            <span className="font-mono">ChromaDB Vector Store · Gemini Flash</span>
+            <span>TalentScan AI · Job-Centric RAG Candidate Workspace</span>
+            <span className="font-mono">SQLite Persistence · Gemini 3.8 Flash · ChromaDB</span>
           </div>
         </footer>
       </div>

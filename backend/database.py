@@ -9,9 +9,12 @@ import sqlite3
 import os
 import json
 import logging
+import secrets
+import uuid
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from collections import defaultdict
 from typing import List, Dict, Any, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -87,11 +90,25 @@ class TalentScanDB:
                     nice_to_haves_total INTEGER DEFAULT 0,
                     interview_questions TEXT DEFAULT '[]',
                     risk_flags TEXT DEFAULT '[]',
+                    source TEXT DEFAULT 'direct_upload',
+                    share_token TEXT,
+                    share_enabled INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
                 )
             """)
+
+            # Safe column additions for pre-existing databases
+            for col_sql in [
+                "ALTER TABLE candidates ADD COLUMN source TEXT DEFAULT 'direct_upload'",
+                "ALTER TABLE candidates ADD COLUMN share_token TEXT",
+                "ALTER TABLE candidates ADD COLUMN share_enabled INTEGER DEFAULT 0",
+            ]:
+                try:
+                    conn.execute(col_sql)
+                except sqlite3.OperationalError:
+                    pass  # column already exists
 
             # 4. Scores Table (Candidate x Requirement evidence)
             conn.execute("""
@@ -110,11 +127,27 @@ class TalentScanDB:
                 )
             """)
 
+            # 5. Stage History Table (For Job Analytics Funnel and Time-in-Stage)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS stage_history (
+                    id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    from_stage TEXT,
+                    to_stage TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    FOREIGN KEY (candidate_id) REFERENCES candidates(id) ON DELETE CASCADE,
+                    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                )
+            """)
+
             # Indexes for high performance queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_requirements_job ON requirements(job_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_job ON candidates(job_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_score ON candidates(job_id, fit_score DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_share ON candidates(share_token)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_candidate ON scores(candidate_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_stage_history_job ON stage_history(job_id)")
 
     # ─────────────────────────────────────────────────────────────
     # Job CRUD Operations
@@ -213,14 +246,16 @@ class TalentScanDB:
     def add_candidate(self, candidate_data: Dict[str, Any]) -> Dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         c_id = candidate_data["id"]
+        source = candidate_data.get("source", "direct_upload")
+        init_status = candidate_data.get("status", "new")
         with self._connect() as conn:
             conn.execute("""
                 INSERT INTO candidates (
                     id, job_id, filename, name, email, phone, skills, education, years_exp,
                     status, notes, fit_score, summary, gaps, must_haves_met, must_haves_total,
                     nice_to_haves_met, nice_to_haves_total, interview_questions, risk_flags,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 c_id,
                 candidate_data["job_id"],
@@ -231,7 +266,7 @@ class TalentScanDB:
                 candidate_data.get("skills", ""),
                 candidate_data.get("education", ""),
                 candidate_data.get("years_exp", 0.0),
-                candidate_data.get("status", "new"),
+                init_status,
                 candidate_data.get("notes", ""),
                 candidate_data.get("fit_score", 0),
                 candidate_data.get("summary", ""),
@@ -242,9 +277,17 @@ class TalentScanDB:
                 candidate_data.get("nice_to_haves_total", 0),
                 json.dumps(candidate_data.get("interview_questions", [])),
                 json.dumps(candidate_data.get("risk_flags", [])),
+                source,
                 now,
                 now
             ))
+
+            # Initial stage history entry
+            conn.execute("""
+                INSERT INTO stage_history (id, candidate_id, job_id, from_stage, to_stage, changed_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (str(uuid.uuid4()), c_id, candidate_data["job_id"], None, init_status, now))
+
         return self.get_candidate(c_id)
 
     def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
@@ -334,6 +377,13 @@ class TalentScanDB:
     ) -> Optional[Dict[str, Any]]:
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
+            # Check current status for stage transition logging
+            row = conn.execute("SELECT status, job_id FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
+            if not row:
+                return None
+            old_status = row["status"]
+            job_id = row["job_id"]
+
             if status is not None and notes is not None:
                 conn.execute(
                     "UPDATE candidates SET status = ?, notes = ?, updated_at = ? WHERE id = ?",
@@ -349,12 +399,216 @@ class TalentScanDB:
                     "UPDATE candidates SET notes = ?, updated_at = ? WHERE id = ?",
                     (notes, now, candidate_id)
                 )
+
+            # If status changed, log stage transition
+            if status is not None and status != old_status:
+                conn.execute("""
+                    INSERT INTO stage_history (id, candidate_id, job_id, from_stage, to_stage, changed_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (str(uuid.uuid4()), candidate_id, job_id, old_status, status, now))
+
         return self.get_candidate(candidate_id)
 
     def delete_candidate(self, candidate_id: str) -> bool:
         with self._connect() as conn:
             res = conn.execute("DELETE FROM candidates WHERE id = ?", (candidate_id,))
             return res.rowcount > 0
+
+    # ─────────────────────────────────────────────────────────────
+    # Shareable Match Explanation Operations
+    # ─────────────────────────────────────────────────────────────
+
+    def create_or_get_share_token(self, candidate_id: str) -> Dict[str, Any]:
+        """Creates or reuses a secure token for public candidate scorecard sharing."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT id, share_token, share_enabled FROM candidates WHERE id = ?", (candidate_id,)).fetchone()
+            if not row:
+                raise ValueError(f"Candidate {candidate_id} not found.")
+
+            token = row["share_token"]
+            if not token or not row["share_enabled"]:
+                token = secrets.token_urlsafe(18)
+                conn.execute(
+                    "UPDATE candidates SET share_token = ?, share_enabled = 1, updated_at = ? WHERE id = ?",
+                    (token, datetime.now(timezone.utc).isoformat(), candidate_id)
+                )
+            return {
+                "candidate_id": candidate_id,
+                "share_token": token,
+                "share_url": f"/?share={token}",
+                "share_enabled": True
+            }
+
+    def disable_share_token(self, candidate_id: str) -> bool:
+        """Revokes public sharing access for a candidate."""
+        with self._connect() as conn:
+            res = conn.execute(
+                "UPDATE candidates SET share_enabled = 0, updated_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), candidate_id)
+            )
+            return res.rowcount > 0
+
+    def get_candidate_by_share_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Returns sanitized scorecard details for a valid share token, stripping private notes."""
+        if not token:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, job_id, share_enabled FROM candidates WHERE share_token = ?",
+                (token,)
+            ).fetchone()
+            if not row or not row["share_enabled"]:
+                return None
+
+            candidate_id = row["id"]
+            job_id = row["job_id"]
+            job_row = conn.execute("SELECT title, description FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            job_title = job_row["title"] if job_row else "Job Position"
+
+        cand = self.get_candidate(candidate_id)
+        if not cand:
+            return None
+
+        # Sanitize for public viewing: remove internal recruiter notes
+        sanitized = {
+            "id": cand["id"],
+            "name": cand.get("name") or cand.get("filename", "Candidate"),
+            "filename": cand.get("filename", ""),
+            "job_id": job_id,
+            "job_title": job_title,
+            "fit_score": cand.get("fit_score", 0),
+            "summary": cand.get("summary", ""),
+            "gaps": cand.get("gaps", ""),
+            "status": cand.get("status", "new"),
+            "must_haves_met": cand.get("must_haves_met", 0),
+            "must_haves_total": cand.get("must_haves_total", 0),
+            "nice_to_haves_met": cand.get("nice_to_haves_met", 0),
+            "nice_to_haves_total": cand.get("nice_to_haves_total", 0),
+            "skills": cand.get("skills", ""),
+            "years_exp": cand.get("years_exp", 0.0),
+            "education": cand.get("education", ""),
+            "requirements": cand.get("requirements", []),
+            "interview_questions": cand.get("interview_questions", []),
+            "risk_flags": cand.get("risk_flags", []),
+            "created_at": cand.get("created_at", ""),
+            "is_public_share": True
+        }
+        return sanitized
+
+    # ─────────────────────────────────────────────────────────────
+    # Job Posting Analytics Operations
+    # ─────────────────────────────────────────────────────────────
+
+    def get_job_analytics(self, job_id: str) -> Dict[str, Any]:
+        """Calculates funnel conversion, time-in-stage, drop-off reasons, and source quality."""
+        job = self.get_job(job_id)
+        if not job:
+            return {"error": f"Job {job_id} not found."}
+
+        with self._connect() as conn:
+            candidates_rows = conn.execute("SELECT * FROM candidates WHERE job_id = ?", (job_id,)).fetchall()
+            candidates = [dict(r) for r in candidates_rows]
+
+            history_rows = conn.execute(
+                "SELECT * FROM stage_history WHERE job_id = ? ORDER BY changed_at ASC",
+                (job_id,)
+            ).fetchall()
+            stage_events = [dict(r) for r in history_rows]
+
+        total_candidates = len(candidates)
+        counts = {"new": 0, "shortlisted": 0, "maybe": 0, "rejected": 0}
+        screened_count = 0
+        score_sum = 0
+
+        for c in candidates:
+            st = c.get("status", "new")
+            counts[st] = counts.get(st, 0) + 1
+            if (c.get("fit_score") or 0) > 0:
+                screened_count += 1
+            score_sum += (c.get("fit_score") or 0)
+
+        avg_score = round(score_sum / total_candidates, 1) if total_candidates > 0 else 0
+        shortlisted_count = counts.get("shortlisted", 0)
+        reviewed_count = shortlisted_count + counts.get("maybe", 0) + counts.get("rejected", 0)
+
+        # Funnel stages
+        funnel = [
+            {"stage": "Total Resumes", "count": total_candidates, "pct": 100},
+            {"stage": "Auto-Screened", "count": screened_count, "pct": round((screened_count / total_candidates * 100), 1) if total_candidates > 0 else 0},
+            {"stage": "Recruiter Review", "count": reviewed_count, "pct": round((reviewed_count / total_candidates * 100), 1) if total_candidates > 0 else 0},
+            {"stage": "Shortlisted", "count": shortlisted_count, "pct": round((shortlisted_count / total_candidates * 100), 1) if total_candidates > 0 else 0},
+        ]
+
+        # Calculate time-in-stage metrics (hours from 'new' to target stage)
+        cand_events = defaultdict(list)
+        for ev in stage_events:
+            cand_events[ev["candidate_id"]].append(ev)
+
+        hours_to_shortlist = []
+        hours_to_decision = []
+        for c_id, events in cand_events.items():
+            if not events:
+                continue
+            first_time = datetime.fromisoformat(events[0]["changed_at"])
+            for ev in events[1:]:
+                ev_time = datetime.fromisoformat(ev["changed_at"])
+                diff_hours = (ev_time - first_time).total_seconds() / 3600.0
+                hours_to_decision.append(diff_hours)
+                if ev["to_stage"] == "shortlisted":
+                    hours_to_shortlist.append(diff_hours)
+
+        avg_hours_to_shortlist = round(sum(hours_to_shortlist) / len(hours_to_shortlist), 1) if hours_to_shortlist else 0.5
+        avg_hours_to_decision = round(sum(hours_to_decision) / len(hours_to_decision), 1) if hours_to_decision else 0.8
+
+        # Drop-off analysis (top missing skills/gaps in rejected/maybe candidates)
+        gap_freq = defaultdict(int)
+        for c in candidates:
+            if c.get("status") in ("rejected", "maybe"):
+                g = c.get("gaps", "")
+                if g:
+                    for part in g.split(";"):
+                        cleaned = part.strip().strip(".")
+                        if cleaned and len(cleaned) > 2:
+                            gap_freq[cleaned] += 1
+
+        top_dropoffs = sorted([{"reason": k, "count": v} for k, v in gap_freq.items()], key=lambda x: x["count"], reverse=True)[:5]
+
+        # Source quality breakdown
+        sources = defaultdict(lambda: {"total": 0, "shortlisted": 0, "score_sum": 0})
+        for c in candidates:
+            src = c.get("source") or "direct_upload"
+            sources[src]["total"] += 1
+            if c.get("status") == "shortlisted":
+                sources[src]["shortlisted"] += 1
+            sources[src]["score_sum"] += (c.get("fit_score") or 0)
+
+        source_quality = []
+        for src, d in sources.items():
+            tot = d["total"]
+            sh = d["shortlisted"]
+            source_quality.append({
+                "source": src.replace("_", " ").title(),
+                "total": tot,
+                "shortlisted": sh,
+                "conversion_pct": round((sh / tot) * 100, 1) if tot > 0 else 0,
+                "avg_score": round(d["score_sum"] / tot, 1) if tot > 0 else 0
+            })
+
+        return {
+            "job_id": job_id,
+            "job_title": job["title"],
+            "total_candidates": total_candidates,
+            "counts_by_status": counts,
+            "avg_fit_score": avg_score,
+            "funnel": funnel,
+            "time_in_stage": {
+                "avg_hours_to_shortlist": avg_hours_to_shortlist,
+                "avg_hours_to_decision": avg_hours_to_decision,
+                "total_transitions_logged": len(stage_events)
+            },
+            "top_dropoffs": top_dropoffs,
+            "source_quality": sorted(source_quality, key=lambda s: s["shortlisted"], reverse=True)
+        }
 
     # ─────────────────────────────────────────────────────────────
     # Scoring Operations

@@ -121,3 +121,158 @@ def test_candidate_scoring_detail_and_decision():
     assert export_res.status_code == 200
     assert "text/csv" in export_res.headers.get("content-type", "")
     assert "A. Sharma" in export_res.text
+
+
+def test_v2_shareable_link_and_public_scorecard():
+    """Test generating a secure shareable link and loading public scorecard without recruiter notes."""
+    import uuid
+    # Create Job and Candidate
+    job = client.post("/api/jobs", json={
+        "title": "Full Stack Dev",
+        "description": "Must have: React, Python. Nice to have: Docker."
+    }).json()
+
+    c_id = str(uuid.uuid4())
+    db.add_candidate({
+        "id": c_id,
+        "job_id": job["id"],
+        "filename": "candidate_jane.pdf",
+        "name": "Jane Doe",
+        "skills": "React, Python, TailwindCSS",
+        "years_exp": 3.0,
+        "status": "shortlisted",
+        "notes": "CONFIDENTIAL RECRUITER NOTE: Target salary $140k"
+    })
+    # Trigger scoring
+    client.get(f"/api/candidates/{c_id}")
+
+    # Generate share link
+    share_res = client.post(f"/api/candidates/{c_id}/share")
+    assert share_res.status_code == 200, share_res.text
+    share_data = share_res.json()
+    assert "share_token" in share_data
+    token = share_data["share_token"]
+
+    # Public scorecard retrieval
+    public_res = client.get(f"/api/public/share/{token}")
+    assert public_res.status_code == 200, public_res.text
+    card = public_res.json()
+    assert card["name"] == "Jane Doe"
+    assert card["job_title"] == "Full Stack Dev"
+    assert card["fit_score"] > 0
+    assert len(card["requirements"]) > 0
+    # Crucial security check: recruiter private notes must NEVER leak in public scorecard
+    assert "notes" not in card
+    assert "CONFIDENTIAL" not in str(card)
+
+    # Revoke share link
+    revoke_res = client.delete(f"/api/candidates/{c_id}/share")
+    assert revoke_res.status_code == 200
+    # Now public link should 404
+    assert client.get(f"/api/public/share/{token}").status_code == 404
+
+
+def test_v2_job_analytics_and_funnel():
+    """Test job funnel conversion, drop-off root causes, and source-of-hire quality."""
+    import uuid
+    job = client.post("/api/jobs", json={
+        "title": "Cloud Architect",
+        "description": "Must have: AWS, Terraform. Nice to have: Kubernetes."
+    }).json()
+    job_id = job["id"]
+
+    # Add candidates with various sources and statuses
+    c1 = str(uuid.uuid4())
+    db.add_candidate({
+        "id": c1,
+        "job_id": job_id,
+        "filename": "c1.pdf",
+        "name": "C1 AWS Pro",
+        "skills": "AWS, Terraform",
+        "status": "shortlisted",
+        "source": "referral"
+    })
+    client.get(f"/api/candidates/{c1}")
+
+    c2 = str(uuid.uuid4())
+    db.add_candidate({
+        "id": c2,
+        "job_id": job_id,
+        "filename": "c2.pdf",
+        "name": "C2 Junior",
+        "skills": "HTML",
+        "status": "rejected",
+        "gaps": "Missing AWS; Missing Terraform",
+        "source": "direct_upload"
+    })
+
+    # Fetch analytics
+    analytics_res = client.get(f"/api/jobs/{job_id}/analytics")
+    assert analytics_res.status_code == 200, analytics_res.text
+    data = analytics_res.json()
+    assert data["total_candidates"] == 2
+    assert "funnel" in data
+    assert len(data["funnel"]) == 4
+    assert "source_quality" in data
+    assert any(s["source"] == "Referral" for s in data["source_quality"])
+    assert "top_dropoffs" in data
+    assert any("AWS" in d["reason"] for d in data["top_dropoffs"])
+
+
+def test_v2_upskilling_roadmap_and_smart_reranker():
+    """Test skill gap upskilling roadmap generation and feedback-weighted reranking."""
+    import uuid
+    job = client.post("/api/jobs", json={
+        "title": "DevOps Engineer",
+        "description": "Must have: Kubernetes, Docker, CI/CD. Nice to have: Python."
+    }).json()
+    job_id = job["id"]
+
+    # Candidate 1: Missing Kubernetes
+    c1_id = str(uuid.uuid4())
+    db.add_candidate({
+        "id": c1_id,
+        "job_id": job_id,
+        "filename": "devops_c1.pdf",
+        "name": "DevOps Novice",
+        "skills": "Python, Linux",
+        "status": "new"
+    })
+    # Score candidate
+    client.get(f"/api/candidates/{c1_id}")
+
+    # Test upskilling endpoint
+    upskill_res = client.get(f"/api/candidates/{c1_id}/upskilling")
+    assert upskill_res.status_code == 200, upskill_res.text
+    upskill = upskill_res.json()
+    assert "roadmap_items" in upskill
+    assert len(upskill["roadmap_items"]) > 0
+    # Kubernetes should map to curated project & courses
+    k8s_item = next((item for item in upskill["roadmap_items"] if "kubernetes" in item["skill"].lower()), None)
+    assert k8s_item is not None
+    assert len(k8s_item["courses"]) > 0
+    assert "project" in k8s_item["practice_project"].lower() or "deploy" in k8s_item["practice_project"].lower()
+
+    # Add second candidate and assign decisions (c1=shortlisted, c2=rejected)
+    c2_id = str(uuid.uuid4())
+    db.add_candidate({
+        "id": c2_id,
+        "job_id": job_id,
+        "filename": "devops_c2.pdf",
+        "name": "DevOps Reject",
+        "skills": "WordPress",
+        "status": "rejected"
+    })
+    client.patch(f"/api/candidates/{c1_id}", json={"status": "shortlisted"})
+
+    # Test smart rerank sorting
+    rerank_res = client.get(f"/api/jobs/{job_id}/candidates?sort=smart_rerank")
+    assert rerank_res.status_code == 200, rerank_res.text
+    rerank_data = rerank_res.json()
+    assert rerank_data["smart_rerank_active"] is True
+    assert rerank_data["model_trained"] is True
+    assert "Smart model active" in rerank_data["feedback_signal"]
+    cands = rerank_data["candidates"]
+    assert "smart_score" in cands[0]
+    assert "smart_boost" in cands[0]
+

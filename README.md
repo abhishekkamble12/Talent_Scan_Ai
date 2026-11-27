@@ -1,21 +1,61 @@
-# 🤖 TalentScan AI — Intelligent Resume Screener
+# ◈ TalentScan AI — Job-Centric Candidate Intelligence & Auditable Screening
 
-> An AI-powered resume screening and candidate analysis system built with **Retrieval-Augmented Generation (RAG)**, **LangChain**, **ChromaDB**, and **Google Gemini 1.5 Flash**.
-
-![TalentScan AI Architecture](resume_screener.png)
+> An enterprise-grade AI resume screening and recruitment decision platform built with **FastAPI**, **SQLite**, **Retrieval-Augmented Generation (RAG)**, **ChromaDB**, and **Google Gemini Flash**.
 
 ---
 
-## 🌟 Key Features
+## 🎯 Core Transformation
 
-- **Automated PDF Resume Ingestion**: Parses, splits, and embeds PDF resumes into ChromaDB vector database.
-- **RAG-Powered Candidate Q&A**: Uses hybrid similarity retrieval against the job description and candidate profiles to answer technical screening questions.
-- **Candidate Pool Directory**: Filterable directory of all indexed candidate documents with direct 1-click evaluation triggers.
-- **AI Performance & Observability (AIOps)**: Real-time telemetry tracking vector similarity, P50/P95 latency, token cost estimates, and automated LLM-as-a-judge quality ratings stored in SQLite.
-- **1-Click Demo Pre-loader**: Instantly seeds the database with sample candidate resumes and a full Job Description for quick presentations.
-- **Command Palette (`Ctrl+K`)**: Native `<dialog>` top-layer command palette for rapid view navigation and actions.
-- **Modern Accessible UI**: Fluid SPA built with React 18, Vite, and TailwindCSS featuring the View Transitions API, auto-sizing inputs, and dark-mode native styling.
-- **Markdown-Safe Output**: Renders structured candidate comparisons, skills matrices, and interview question suggestions safely with `react-markdown`.
+TalentScan AI has evolved from a simple "chat box over resumes" into a **job-centric recruitment workspace**:
+
+```
+Create Job → Upload Resumes → Auto-Screen → Ranked Shortlist
+   → Candidate Detail (Evidence Citations) → Compare Matrix → Decide → Export
+                         ↘ Scoped AI Copilot
+```
+
+| Old Chat-Only Paradigm | Redesigned TalentScan AI |
+|---|---|
+| Unstructured Markdown responses | **Auditable structured scoring schema** with page & quote citations |
+| Recruiter had to type prompts | **Automated screening runs on upload** |
+| Single flat list of resumes | **Job-centric workspaces** with editable Must-Have / Nice-to-Have chips |
+| No persistent decisions | **Persisted candidate status** (Shortlisted, Maybe, Rejected) & notes in SQLite |
+| Manual comparison | **Side-by-side comparison matrix** with differences-only toggle |
+
+---
+
+## 🌟 Key Capabilities
+
+1. **Job Workspaces & Role Criteria Extraction**:
+   - Paste a Job Description to automatically extract editable **Must-Have** (75% weight) and **Nice-to-Have** (25% weight) criteria chips.
+   - Reorder, change categories, or add custom criteria on the fly.
+
+2. **Automated Auditable Screening**:
+   - Upload PDF resumes; screening executes automatically via SSE streaming.
+   - Yields a **Ranked Candidate Table** with SVG Score Rings (green ≥75, amber 50-74, red <50), must-haves met ratios, and concise gap summaries (e.g., *"No K8s, AWS"*).
+
+3. **Candidate Evidence Drawer**:
+   - Click any candidate row to slide open an in-depth review drawer.
+   - Verbatim resume quotes with **exact page number citations** (`"Built FastAPI microservices..." p.1`).
+   - Automated detection of **Risk Flags** (e.g. timeline gaps > 6 months).
+   - Generates 3 customized **technical interview questions** targeted to probe the candidate's gaps.
+   - **One-click decisions**: `[Shortlist]`, `[Maybe]`, `[Reject]` with auto-saving recruiter notes.
+
+4. **Candidate Comparison Matrix**:
+   - Select 2–4 candidates to compare in a side-by-side grid of requirements vs. candidate evidence.
+   - *"Differences only"* toggle highlights key differentiators between final candidates.
+
+5. **Pipeline (Kanban) View**:
+   - Toggle between standard Table view and an interactive Kanban board (`New` → `Maybe` → `Shortlisted` → `Rejected`).
+
+6. **Blind Screening Mode**:
+   - Single-click toggle to mask candidate names, files, and degrees for unbiased technical review.
+
+7. **AIOps Telemetry & Insights**:
+   - Engineering-grade observability tracking vector retrieval latencies, token costs, similarity distributions, and automated LLM-as-a-judge quality ratings.
+
+8. **Export**:
+   - Download complete ranked candidate evaluations and gap summaries as CSV reports.
 
 ---
 
@@ -27,30 +67,32 @@ User / Recruiter
       ▼
 ┌──────────────────────────────────────────────────────────┐
 │             React + Vite Frontend (Port 5173)            │
-│  - Step 1: Upload Resumes & Target Job Description       │
-│  - Step 2: Ask Questions / Suggested Query Chips        │
-│  - Real-time Backend & Vector Store Status Badges       │
+│  - Active Job Switcher & Workspace Tabs                  │
+│  - Table & Kanban Pipeline Views                         │
+│  - Right-Side Auditable Evidence Drawer                  │
+│  - Side-by-Side Comparison Matrix                        │
+│  - Scoped AI Recruiter Copilot                           │
 └────────────────────────────┬─────────────────────────────┘
-                             │ REST API
+                             │ REST & SSE Streams
                              ▼
 ┌──────────────────────────────────────────────────────────┐
 │              FastAPI Backend API (Port 5000)             │
-│  - /docs             : Interactive Swagger / OpenAPI UI  │
-│  - /api/status       : System health, resumes count      │
-│  - /api/upload       : Upload & index PDFs into Chroma   │
-│  - /api/predict      : RAG query synthesis with Gemini   │
-│  - /api/load-sample  : 1-click demo data seeder          │
-│  - /api/reset        : Wipe uploads & vector DB          │
-│  - /api/aiops/*      : Telemetry, latency & LLM judge    │
-└────────────────────────────┬─────────────────────────────┘
-                             │
-            ┌────────────────┴────────────────┐
-            ▼                                 ▼
-┌───────────────────────┐         ┌────────────────────────┐
-│  ChromaDB Vector DB   │         │  Google Gemini 1.5     │
-│  - Document chunks    │         │  - Embeddings-001      │
-│  - Semantic search    │         │  - Gemini 1.5 Flash    │
-└───────────────────────┘         └────────────────────────┘
+│  - /api/jobs               : Create & manage workspaces  │
+│  - /api/jobs/{id}/screen   : SSE auto-scoring pipeline   │
+│  - /api/jobs/{id}/compare  : Side-by-side matrix         │
+│  - /api/candidates/{id}    : Detail, evidence & status   │
+│  - /api/jobs/{id}/export   : CSV report download         │
+│  - /api/load-sample        : 1-click demo data seeder    │
+└──────────────┬────────────────────────────┬──────────────┘
+               │                            │
+               ▼                            ▼
+┌─────────────────────────────┐ ┌──────────────────────────┐
+│     SQLite Database         │ │    ChromaDB Vector Store │
+│  - jobs                     │ │    - PDF chunks & text   │
+│  - requirements             │ │    - Gemini Embeddings   │
+│  - candidates & fit scores  │ └──────────────────────────┘
+│  - auditable scores table   │
+└─────────────────────────────┘
 ```
 
 ---
@@ -62,42 +104,21 @@ User / Recruiter
 - **Node.js 18+** & npm
 - **Google Gemini API Key** (Free tier available at [Google AI Studio](https://aistudio.google.com/))
 
-### 2. Environment Configuration
-Create a `.env` file in the root directory (you can copy `.env.example`):
-```bash
-copy .env.example .env
-```
-Open `.env` and set your key:
+### 2. Configuration
+Create or configure your `.env` file in the root directory:
 ```env
-GOOGLE_API_KEY=AIzaSy...your_gemini_key_here
+GOOGLE_API_KEY=your_gemini_api_key_here
 PORT=5000
 ```
 
-### 3. Install Dependencies
-```bash
-# Python dependencies
-pip install -r requirements.txt
-
-# Frontend dependencies
-cd frontend
-npm install
-cd ..
-```
-
-### 4. Run the Project
-**Option A — Docker Compose (recommended):**
-```bash
-docker compose up --build
-```
-Open **http://localhost:5173** (Frontend) and **http://localhost:5000/docs** (FastAPI Swagger UI).
-
-**Option B — Local Demo Script:**
-Launch both Backend and Frontend in one step:
+### 3. Run the Project
+**Option A — Single-Command Demo Script:**
 ```bat
 start_project.bat
 ```
-Or start them manually in two terminals:
-- **Terminal 1 (Backend - FastAPI + Uvicorn)**:
+
+**Option B — Manual Startup:**
+- **Terminal 1 (Backend - FastAPI)**:
   ```bash
   python backend/app.py
   ```
@@ -112,57 +133,22 @@ Open your browser at **http://localhost:5173**.
 
 ---
 
-## 🎬 3-Minute Live Demo Walkthrough
+## 🎬 3-Minute Recruiter Demo Walkthrough
 
-1. **Open the App**: Navigate to `http://localhost:5173`. Point out the system status badges in the top navbar (Backend Online, Resumes Count, API Key Status).
-2. **One-Click Demo Setup**: Click the **"1-Click Demo Seed"** button in Step 1. In under 5 seconds, it loads 6 pre-bundled resumes and populates the Job Description without manual file searching.
-3. **Execute AI Candidate Analysis**:
-   - Click the prompt chip: *"Identify the top 3 candidates and explain why they fit this job description."*
-   - Watch Gemini analyze the resumes against the JD context and generate structured rationale.
-   - Click the prompt chip: *"Create a skills comparison matrix for all candidates against the requirements."*
-   - Click *"Copy"* to grab the response.
-4. **Custom Query**: Type a custom query, e.g.:
-   > *"Which candidate has the most hands-on experience with Docker and CI/CD?"*
+1. **One-Click Demo Setup**: Click the **"1-Click Demo Seed"** button in the left sidebar or top bar. In seconds, it creates a *Full Stack Software Engineer* job workspace, populates 6 candidate resumes, and auto-screens them.
+2. **Review the Ranked Table**: Inspect the candidate fit scores (green/amber/red score rings), must-haves met (`6/7 ✓✓✓✓✓✓✗`), and identified gaps.
+3. **Open Evidence Drawer**: Click on top candidate *A. Sharma* to review the 2-line AI summary, exact quote citations with PDF page numbers, and suggested interview questions.
+4. **Make a Decision**: Click `[Shortlist]` and add recruiter notes.
+5. **Compare Candidates**: Check 2-3 candidate rows and click `[Compare Matrix]` for a side-by-side verdict grid.
+6. **Toggle Blind Mode**: Click `[Blind Mode]` in the filter bar to see names masked for unbiased evaluation.
 
 ---
 
-## 📁 Project Structure
+## 🧪 Testing
 
-```
-resume-screener/
-├── .env.example              # Sample environment configuration
-├── requirements.txt          # Python package requirements
-├── start_project.bat         # Single-command demo startup script
-├── seed_demo_data.py         # Standalone CLI demo data seeder
-├── aiops_metrics.db          # SQLite telemetry & LLM quality judge store
-├── README.md                 # Project documentation
-│
-├── backend/
-│   ├── app.py                # FastAPI REST API endpoints & AIOps routes
-│   ├── rag_pipeline.py       # LangChain + ChromaDB pipeline
-│   └── utils.py              # Gemini LLM invocation & prompt templates
-│
-├── bot/
-│   └── data/pdfs/            # Bundled sample resumes for instant demo
-│
-├── frontend/
-│   ├── src/
-│   │   ├── api/
-│   │   │   └── client.js     # Centralized Axios API instance & env config
-│   │   ├── components/
-│   │   │   ├── CandidatePool.jsx     # Indexed resume directory & filter
-│   │   │   ├── CommandPalette.jsx    # Native <dialog> command palette (Ctrl+K)
-│   │   │   ├── LandingView.jsx       # Platform overview
-│   │   │   ├── WorkspaceSettings.jsx # Storage & API configuration
-│   │   │   └── ui.jsx                # Reusable design system primitives
-│   │   ├── AIOpsDashboard.jsx        # Live telemetry & LLM evaluation dashboard
-│   │   ├── App.jsx                   # Layout, navigation drawer & view transitions
-│   │   ├── ResumeUploader.jsx        # Accessible PDF upload & JD editor
-│   │   └── LLMQueryComponent.jsx     # AI Q&A, prompt chips & report export
-│   ├── index.html
-│   └── package.json
-│
-└── uploads/                  # Storage for uploaded PDFs & active JD
+Run backend unit and integration tests:
+```bash
+python -m pytest tests/test_redesign_api.py -v
 ```
 
 ---

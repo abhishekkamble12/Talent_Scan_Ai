@@ -36,17 +36,29 @@ class RAGPipeline:
             logging.warning(f"Data path does not exist: {self.data_path}")
             return []
 
-        loader = {
-            "pdf": PyPDFDirectoryLoader(
-                self.data_path,
-                glob="*.pdf",
-            ),
-        }
+        from langchain_community.document_loaders import PyPDFLoader
 
-        if self.document_type not in loader:
-            raise ValueError(f"Unsupported document type: {self.document_type}")
+        documents = []
+        pdf_files = [
+            f for f in Path(self.data_path).glob("*.pdf")
+            if f.is_file()
+        ]
 
-        documents = loader[self.document_type].load()
+        for pfile in pdf_files:
+            try:
+                # Check magic header
+                with open(pfile, "rb") as fp:
+                    header = fp.read(5)
+                if header != b"%PDF-":
+                    logging.warning(f"Skipping non-PDF file: {pfile.name}")
+                    continue
+
+                loader = PyPDFLoader(str(pfile))
+                loaded = loader.load()
+                documents.extend(loaded)
+            except Exception as e:
+                logging.warning(f"Error loading {pfile.name}: {e}")
+
         logging.info(f"Loaded {len(documents)} document pages from {self.data_path}")
         return documents
 

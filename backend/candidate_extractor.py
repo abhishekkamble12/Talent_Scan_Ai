@@ -36,12 +36,23 @@ DEGREE_PATTERNS = [
 def extract_candidate_name_from_text(text: str, filename: str) -> str:
     """Infers candidate full name from header or filename."""
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-    for line in lines[:5]:
+
+    # Check if lines 0 and 1 are split First Name / Last Name
+    if len(lines) >= 2:
+        w0 = re.sub(r"[^A-Za-z]", "", lines[0]).strip()
+        w1 = re.sub(r"[^A-Za-z]", "", lines[1]).strip()
+        if w0 and w1 and len(w0) >= 2 and len(w1) >= 2:
+            if w0[0].isupper() and w1[0].isupper():
+                combined = f"{w0} {w1}"
+                if not any(kw in combined.lower() for kw in ["resume", "curriculum", "vitae", "summary", "profile", "contact", "developer", "engineer", "phone", "email"]):
+                    return combined
+
+    for line in lines[:6]:
         clean = re.sub(r"[^A-Za-z\s.-]", "", line).strip()
         words = clean.split()
         if 2 <= len(words) <= 4 and all(w[0].isupper() for w in words if len(w) > 1):
-            if not any(kw in clean.lower() for kw in ["resume", "curriculum", "vitae", "summary", "profile", "contact", "developer", "engineer"]):
-                return clean
+            if not any(kw in clean.lower() for kw in ["resume", "curriculum", "vitae", "summary", "profile", "contact", "developer", "engineer", "phone", "email"]):
+                return clean.title()
 
     # Fallback to sanitized filename
     base = Path(filename).stem

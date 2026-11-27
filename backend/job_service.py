@@ -122,7 +122,8 @@ def extract_requirements_from_jd(description: str) -> Tuple[str, List[Dict[str, 
                 google_api_key=api_key,
                 max_output_tokens=1024,
                 temperature=0.2,
-                timeout=8,
+                max_retries=0,
+                timeout=15,
             )
             res = llm.invoke(prompt)
             content = res.content if hasattr(res, "content") else str(res)

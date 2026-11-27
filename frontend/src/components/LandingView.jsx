@@ -8,78 +8,92 @@ import {
   Activity,
   Database,
   ShieldCheck,
+  Sparkles,
+  Sun,
+  Moon,
+  Layers,
+  Briefcase,
 } from "lucide-react";
 
 const WORKBENCH_SCENARIOS = [
   {
     id: "shortlist",
-    label: "Top Shortlist",
-    query: "Identify the top 3 candidates and explain why they fit this job description.",
-    latency: "142 ms",
-    chunks: "12 chunks",
+    label: "Ranked Shortlist",
+    query: "Auto-screened 6 candidates against Full Stack Software Engineer (React & Python)",
+    latency: "1.4s",
+    chunks: "6 candidates scored",
     results: [
       {
-        name: "arjun_mehta_fullstack.pdf",
-        score: "0.91",
-        summary: "4+ years React, TypeScript, and Flask REST APIs. Built ChromaDB RAG search in production.",
+        name: "Aaryan Palve",
+        score: "87% Fit",
+        badge: "6/7 Must-Haves ✓✓✓✓✓✓✗",
+        summary: "Strong Python, Flask/FastAPI, and React background. Missing Kubernetes production exposure.",
       },
       {
-        name: "priya_nair_backend.pdf",
-        score: "0.87",
-        summary: "Strong Python, PostgreSQL, and Docker CI/CD pipelines. Led API latency reduction by 38%.",
+        name: "Rushikesh Kulkarni",
+        score: "81% Fit",
+        badge: "5/7 Must-Haves ✓✓✓✓✓✗✗",
+        summary: "Solid PostgreSQL, Python, and ML engineering. Missing Docker and CI/CD pipeline ownership.",
       },
       {
-        name: "rohan_kapoor_swe.pdf",
-        score: "0.82",
-        summary: "Full-stack React and FastAPI background with automated Playwright and pytest suites.",
+        name: "Piyush Choudhari",
+        score: "76% Fit",
+        badge: "5/7 Must-Haves ✓✓✓✓✓✗✗",
+        summary: "FastAPI, Docker, and CI/CD experience verified. Limited TypeScript frontend projects.",
+      },
+    ],
+  },
+  {
+    id: "evidence",
+    label: "Evidence Citations",
+    query: "Auditable quote extraction with exact PDF page citations",
+    latency: "Verified",
+    chunks: "10 criteria checked",
+    results: [
+      {
+        name: "React & TypeScript Interfaces",
+        score: "✓ MET · p.1",
+        badge: "High Confidence",
+        summary: '"Developed a dynamic, React-based cybersecurity dashboard with TailwindCSS…" — Aaryan Palve, Page 1',
+      },
+      {
+        name: "Python REST & Async APIs",
+        score: "✓ MET · p.1",
+        badge: "High Confidence",
+        summary: '"Built FastAPI and Flask microservices handling automated document workflows…" — Piyush Choudhari, Page 1',
+      },
+      {
+        name: "Kubernetes Orchestration",
+        score: "✗ MISSING",
+        badge: "Gap Flagged",
+        summary: "No explicit Kubernetes or Helm deployment evidence found across indexed resume pages.",
       },
     ],
   },
   {
     id: "matrix",
-    label: "Skills Matrix",
-    query: "Create a skills comparison matrix for all candidates against the requirements.",
-    latency: "168 ms",
-    chunks: "16 chunks",
+    label: "Compare Matrix",
+    query: "Side-by-side comparison across top 3 shortlisted candidates",
+    latency: "Instant",
+    chunks: "Differences highlighted",
     results: [
       {
-        name: "React & TypeScript",
-        score: "5 / 6",
-        summary: "Verified production experience across Arjun, Rohan, Sneha, Vikram, and Ananya.",
+        name: "Python & FastAPI / Flask",
+        score: "3 / 3 Match",
+        badge: "All Meet",
+        summary: "Aaryan (✓ p.1), Rushikesh (✓ p.1), and Piyush (✓ p.1) all demonstrate backend Python APIs.",
       },
       {
-        name: "Python & Flask / FastAPI",
-        score: "4 / 6",
-        summary: "Priya, Arjun, Rohan, and Kabir list REST API ownership and schema migrations.",
+        name: "Docker & CI/CD Pipelines",
+        score: "1 / 3 Match",
+        badge: "Key Differentiator",
+        summary: "Piyush (✓ p.1) meets containerization & CI/CD; Aaryan (◐ p.2) partial; Rushikesh (✗) missing.",
       },
       {
-        name: "Vector DBs & RAG",
-        score: "3 / 6",
-        summary: "Arjun (ChromaDB), Priya (pgvector), and Kabir (LangChain) show direct retrieval work.",
-      },
-    ],
-  },
-  {
-    id: "infra",
-    label: "Docker & CI/CD",
-    query: "Which candidate has the most hands-on experience with Docker and CI/CD?",
-    latency: "129 ms",
-    chunks: "9 chunks",
-    results: [
-      {
-        name: "priya_nair_backend.pdf",
-        score: "0.94",
-        summary: "Authored multi-stage Dockerfiles, GitHub Actions release workflows, and Cloud Run deploys.",
-      },
-      {
-        name: "kabir_sharma_platform.pdf",
-        score: "0.86",
-        summary: "Maintained containerized Python microservices and automated staging pipelines on AWS.",
-      },
-      {
-        name: "arjun_mehta_fullstack.pdf",
-        score: "0.78",
-        summary: "Containerized local dev stacks with Docker Compose and integrated lint/build checks.",
+        name: "Vector DBs & RAG Integration",
+        score: "2 / 3 Match",
+        badge: "Key Differentiator",
+        summary: "Piyush (✓ p.1) and Nidhish (✓ p.1) list LangChain/RAG pipelines in production projects.",
       },
     ],
   },
@@ -87,26 +101,34 @@ const WORKBENCH_SCENARIOS = [
 
 const PIPELINE_PILLARS = [
   {
-    icon: Database,
-    title: "Vector Ingestion",
+    icon: Briefcase,
+    title: "1. Job-Centric Workspaces",
     description:
-      "Parses multi-page PDF resumes into semantic chunks and indexes them alongside your target job description in ChromaDB.",
+      "Paste any Job Description and AI extracts editable Must-Have and Nice-to-Have criteria chips so you control exactly what gets scored.",
   },
   {
-    icon: Search,
-    title: "Grounded Synthesis",
+    icon: Database,
+    title: "2. Auto-Screen on Upload",
     description:
-      "Generates candidate rankings, skill matrices, and tailored interview questions anchored strictly in retrieved resume text.",
+      "Bulk drag-and-drop PDF resumes. Parsing, ChromaDB vector indexing, and structured candidate scoring run automatically with live progress.",
   },
   {
     icon: ShieldCheck,
-    title: "Automated Quality Checks",
+    title: "3. Auditable Evidence & Decisions",
     description:
-      "Scores every screening answer asynchronously for relevance, groundedness, and hallucination risk in SQLite.",
+      "Inspect exact verbatim quotes with PDF page numbers, compare 2–4 candidates side-by-side, shortlist with notes, and export CSV reports.",
   },
 ];
 
-const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
+const LandingView = ({
+  status,
+  onNavigate,
+  onOpenCommandPalette,
+  onLoadSample,
+  loadingSample = false,
+  theme = "dark",
+  onToggleTheme,
+}) => {
   const [activeScenarioId, setActiveScenarioId] = useState("shortlist");
   const [scrolled, setScrolled] = useState(false);
 
@@ -123,7 +145,7 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
 
   return (
     <div className="min-h-screen bg-root text-primary hero-atmosphere flex flex-col">
-      {/* Borderless Top Navigation Bar */}
+      {/* Top Navigation Bar */}
       <header
         className={`sticky top-0 z-30 transition-colors duration-200 ${
           scrolled
@@ -135,32 +157,33 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
           <button
             type="button"
             onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-            className="text-base sm:text-lg font-bold tracking-tight text-primary focus-ring rounded-sm"
+            className="flex items-center gap-2 text-base sm:text-lg font-bold tracking-tight text-primary focus-ring rounded-sm"
           >
-            TalentScan AI
+            <span className="w-2.5 h-2.5 rounded-sm bg-accent inline-block" />
+            <span>TalentScan AI</span>
           </button>
 
           <nav aria-label="Homepage Navigation" className="hidden md:flex items-center gap-7 text-sm font-medium">
             <button
               type="button"
-              onClick={() => onNavigate("app")}
+              onClick={() => onNavigate("candidates")}
               className="text-secondary hover:text-primary transition-colors focus-ring rounded-sm"
             >
               Screening
             </button>
             <button
               type="button"
-              onClick={() => onNavigate("pool")}
+              onClick={() => onNavigate("jobs")}
               className="text-secondary hover:text-primary transition-colors focus-ring rounded-sm"
             >
-              Candidate Pool
+              Job Openings
             </button>
             <button
               type="button"
               onClick={() => onNavigate("aiops")}
               className="text-secondary hover:text-primary transition-colors focus-ring rounded-sm"
             >
-              Observability
+              Insights
             </button>
             <button
               type="button"
@@ -171,7 +194,19 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
             </button>
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            {onToggleTheme && (
+              <button
+                type="button"
+                onClick={onToggleTheme}
+                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                className="p-2 rounded-md text-secondary hover:text-primary bg-surface/80 border border-subtle transition-colors focus-ring"
+              >
+                {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onOpenCommandPalette}
@@ -184,7 +219,7 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
 
             <button
               type="button"
-              onClick={() => onNavigate("app")}
+              onClick={() => onNavigate("candidates")}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-accent hover:bg-accent-hover text-root text-xs sm:text-sm font-semibold transition-colors interactive-button focus-ring"
             >
               <span>Open Workspace</span>
@@ -196,45 +231,68 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
 
       <main id="main-content" className="flex-1">
         {/* Hero Section */}
-        <section className="max-w-6xl mx-auto px-5 sm:px-8 pt-12 sm:pt-20 pb-16 sm:pb-24">
+        <section className="max-w-6xl mx-auto px-5 sm:px-8 pt-12 sm:pt-18 pb-16 sm:pb-24">
           <div className="max-w-4xl mx-auto text-center space-y-6 hero-enter">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-accent-tint border border-accent-border text-accent text-xs font-medium">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Job-Centric · Ranked Shortlists · Page-Cited Evidence</span>
+            </div>
+
             <h1
               tabIndex={-1}
-              className="font-bold text-primary tracking-[-0.035em] leading-[0.98] outline-none"
-              style={{ fontSize: "clamp(2.35rem, 1.35rem + 4.2vw, 4.75rem)" }}
+              className="font-bold text-primary tracking-[-0.035em] leading-[1.02] outline-none"
+              style={{ fontSize: "clamp(2.25rem, 1.3rem + 3.8vw, 4.4rem)" }}
             >
-              Screen engineering candidates with grounded evidence.
+              Screen engineering candidates with auditable evidence.
             </h1>
 
-            <p className="text-sm sm:text-base text-secondary leading-relaxed max-w-xl mx-auto">
-              Upload PDF resumes and a job description. Run natural-language queries backed by vector retrieval and automated quality checks.
+            <p className="text-sm sm:text-base text-secondary leading-relaxed max-w-2xl mx-auto">
+              Create a job workspace, upload PDF resumes, and get an instant ranked shortlist—complete with must-have breakdowns, verbatim page citations, side-by-side comparison, and Blind Mode.
             </p>
 
-            <div className="pt-2 flex justify-center">
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
               <button
                 type="button"
-                onClick={() => onNavigate("app")}
-                className="inline-flex items-center gap-2.5 px-6 py-3 rounded-md bg-accent hover:bg-accent-hover text-root text-sm font-semibold transition-colors interactive-button focus-ring"
+                onClick={onLoadSample}
+                disabled={loadingSample}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-md bg-accent hover:bg-accent-hover text-root text-sm font-semibold transition-colors interactive-button focus-ring"
               >
-                <span>Open Screening Workspace</span>
+                <Sparkles className={`w-4 h-4 ${loadingSample ? "animate-spin" : ""}`} />
+                <span>{loadingSample ? "Loading Demo Workspace…" : "Try 1-Click Demo"}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigate("job-create")}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-md bg-surface hover:bg-elevated text-primary border border-subtle text-sm font-semibold transition-colors interactive-button focus-ring"
+              >
+                <span>Create New Job</span>
                 <ArrowRight className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigate("self-check")}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-md bg-root hover:bg-surface text-secondary hover:text-primary border border-subtle text-sm font-medium transition-colors interactive-button focus-ring"
+              >
+                <span>Candidate Self-Check & Roadmap</span>
               </button>
             </div>
           </div>
 
           {/* Wide Interactive Screening Stage */}
           <div className="mt-12 sm:mt-16 max-w-5xl mx-auto hero-enter-delay">
-            <div className="rounded-lg border border-subtle bg-surface/95 shadow-2xl overflow-hidden">
+            <div className="rounded-xl border border-subtle bg-surface/95 shadow-2xl overflow-hidden">
               {/* Stage Header with Connected Segmented Toggle */}
               <div className="px-4 sm:px-6 py-3.5 border-b border-subtle bg-elevated/60 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-xs sm:text-sm font-medium text-primary">
-                  <FileText className="w-4 h-4 text-accent flex-shrink-0" />
-                  <span>Interactive Screening Preview</span>
+                  <Layers className="w-4 h-4 text-accent flex-shrink-0" />
+                  <span>Interactive Workspace Preview</span>
                 </div>
 
                 <div
                   role="tablist"
-                  aria-label="Sample screening queries"
+                  aria-label="Sample screening views"
                   className="inline-flex p-0.5 rounded-md bg-root border border-subtle"
                 >
                   {WORKBENCH_SCENARIOS.map((scenario) => {
@@ -248,7 +306,7 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
                         onClick={() => setActiveScenarioId(scenario.id)}
                         className={`px-3 py-1.5 rounded text-xs font-medium transition-colors focus-ring ${
                           isSelected
-                            ? "bg-elevated text-primary"
+                            ? "bg-elevated text-primary shadow-xs"
                             : "text-secondary hover:text-primary"
                         }`}
                       >
@@ -259,19 +317,19 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
                 </div>
               </div>
 
-              {/* Active Query Prompt Bar */}
-              <div className="px-4 sm:px-6 py-3.5 border-b border-subtle bg-root/50 flex flex-wrap items-center justify-between gap-3">
+              {/* Active Context Bar */}
+              <div className="px-4 sm:px-6 py-3 border-b border-subtle bg-root/50 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 text-xs sm:text-sm text-primary min-w-0">
                   <Search className="w-4 h-4 text-accent flex-shrink-0" />
                   <span className="truncate">{activeScenario.query}</span>
                 </div>
-                <div className="flex items-center gap-4 text-xs text-tertiary tabular-nums flex-shrink-0">
+                <div className="flex items-center gap-4 text-xs text-tertiary tabular-nums flex-shrink-0 font-mono">
                   <span>{activeScenario.chunks}</span>
                   <span className="text-accent font-medium">{activeScenario.latency}</span>
                 </div>
               </div>
 
-              {/* Grounded Results List */}
+              {/* Preview Results List */}
               <div className="divide-y divide-subtle">
                 {activeScenario.results.map((item) => (
                   <div
@@ -279,10 +337,13 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
                     className="px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-6 hover:bg-elevated/35 transition-colors"
                   >
                     <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <CheckCircle2 className="w-4 h-4 text-accent flex-shrink-0" />
                         <span className="text-sm font-semibold text-primary truncate">
                           {item.name}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-elevated border border-subtle text-[11px] font-mono text-secondary">
+                          {item.badge}
                         </span>
                       </div>
                       <p className="text-xs sm:text-sm text-secondary leading-relaxed pl-6">
@@ -290,7 +351,7 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
                       </p>
                     </div>
                     <div className="pl-6 sm:pl-0 flex-shrink-0 text-left sm:text-right">
-                      <span className="text-sm font-semibold text-accent tabular-nums">
+                      <span className="text-sm font-semibold text-accent tabular-nums font-mono">
                         {item.score}
                       </span>
                     </div>
@@ -300,17 +361,19 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
 
               {/* Stage Footer */}
               <div className="px-4 sm:px-6 py-3 border-t border-subtle bg-elevated/30 flex flex-wrap items-center justify-between gap-3 text-xs text-secondary">
-                <span>
+                <span className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${status.online ? "bg-emerald-400" : "bg-amber-400"}`} />
                   {status.online
-                    ? `Backend connected (${status.resumes_count} indexed resumes)`
-                    : "Start the FastAPI server to run queries against your own PDFs"}
+                    ? `Backend connected · ${status.jobs_count || 0} active jobs · ${status.resumes_count} indexed resumes`
+                    : "Start the FastAPI server to run live screening against your own PDFs"}
                 </span>
                 <button
                   type="button"
-                  onClick={() => onNavigate("app")}
-                  className="inline-flex items-center gap-1.5 text-accent hover:text-accent-hover font-medium transition-colors focus-ring rounded-sm"
+                  onClick={onLoadSample}
+                  disabled={loadingSample}
+                  className="inline-flex items-center gap-1.5 text-accent hover:text-accent-hover font-semibold transition-colors focus-ring rounded-sm"
                 >
-                  <span>Try with sample resumes</span>
+                  <span>{loadingSample ? "Loading Demo…" : "Launch 1-Click Demo"}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -318,15 +381,15 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
           </div>
         </section>
 
-        {/* Asymmetric Editorial Workflow Section */}
+        {/* Workflow Section */}
         <section className="border-t border-subtle bg-surface/40">
           <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16 sm:py-24 grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-16 items-start">
             <div className="lg:col-span-5 lg:sticky lg:top-24 space-y-4">
               <h2 className="text-2xl sm:text-3xl font-bold text-primary tracking-tight leading-tight">
-                From raw PDFs to verified shortlists.
+                Recruiters think in ranked lists and evidence—not chat boxes.
               </h2>
               <p className="text-sm text-secondary leading-relaxed max-w-prose">
-                Every answer is anchored to retrieved resume chunks in ChromaDB, so hiring teams see exact evidence rather than unverified summaries.
+                Every candidate is scored deterministically against your Must-Have and Nice-to-Have criteria, with verbatim PDF quotes and page citations so hiring managers trust every decision.
               </p>
             </div>
 
@@ -356,10 +419,10 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
           <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16 sm:py-24 grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
             <div className="lg:col-span-6 space-y-4">
               <h2 className="text-2xl sm:text-3xl font-bold text-primary tracking-tight leading-tight">
-                Built-in observability for every screening query.
+                Built-in AIOps observability for every query.
               </h2>
               <p className="text-sm text-secondary leading-relaxed max-w-prose">
-                Track P50 and P95 latency, vector similarity scores, and automated LLM-as-a-judge ratings across every request.
+                Track P50 and P95 latency, vector similarity scores, token costs, and automated LLM-as-a-judge ratings in the Insights dashboard.
               </p>
               <div className="pt-2">
                 <button
@@ -368,7 +431,7 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
                   className="inline-flex items-center gap-2 px-4 py-2.5 rounded-md bg-elevated hover:bg-overlay text-primary border border-subtle text-sm font-medium transition-colors interactive-button focus-ring"
                 >
                   <Activity className="w-4 h-4 text-accent" />
-                  <span>Inspect Observability</span>
+                  <span>Inspect Insights Dashboard</span>
                 </button>
               </div>
             </div>
@@ -376,15 +439,15 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
             <div className="lg:col-span-6 rounded-lg border border-subtle bg-surface divide-y divide-subtle">
               <div className="px-5 py-4 flex items-center justify-between">
                 <span className="text-sm text-secondary">Median End-to-End Latency</span>
-                <span className="text-base font-semibold text-primary tabular-nums">184 ms</span>
+                <span className="text-base font-semibold text-primary tabular-nums font-mono">184 ms</span>
               </div>
               <div className="px-5 py-4 flex items-center justify-between">
                 <span className="text-sm text-secondary">Mean Retrieval Similarity</span>
-                <span className="text-base font-semibold text-accent tabular-nums">0.864</span>
+                <span className="text-base font-semibold text-accent tabular-nums font-mono">0.864</span>
               </div>
               <div className="px-5 py-4 flex items-center justify-between">
                 <span className="text-sm text-secondary">Context Groundedness Score</span>
-                <span className="text-base font-semibold text-primary tabular-nums">4.9 / 5.0</span>
+                <span className="text-base font-semibold text-primary tabular-nums font-mono">4.9 / 5.0</span>
               </div>
             </div>
           </div>
@@ -397,13 +460,22 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
               Ready to screen your candidate pool?
             </h2>
             <p className="text-sm text-secondary max-w-md mx-auto">
-              Upload your own PDFs or load six bundled sample resumes in one click.
+              Create your own job workspace or load six bundled sample resumes in one click.
             </p>
-            <div className="pt-1 flex justify-center">
+            <div className="pt-1 flex flex-wrap justify-center gap-3">
               <button
                 type="button"
-                onClick={() => onNavigate("app")}
+                onClick={onLoadSample}
+                disabled={loadingSample}
                 className="inline-flex items-center gap-2 px-6 py-3 rounded-md bg-accent hover:bg-accent-hover text-root text-sm font-semibold transition-colors interactive-button focus-ring"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>{loadingSample ? "Loading Demo…" : "Try 1-Click Demo"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate("candidates")}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-md bg-elevated hover:bg-overlay text-primary border border-subtle text-sm font-semibold transition-colors interactive-button focus-ring"
               >
                 <span>Open Screening Workspace</span>
                 <ArrowRight className="w-4 h-4" />
@@ -415,8 +487,8 @@ const LandingView = ({ status, onNavigate, onOpenCommandPalette }) => {
 
       <footer className="border-t border-subtle py-6 px-5 sm:px-8 text-xs text-tertiary">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span className="text-secondary font-medium">TalentScan AI</span>
-          <span>ChromaDB · Gemini Flash · SQLite AIOps</span>
+          <span className="text-secondary font-medium">TalentScan AI · Auditable Candidate Intelligence</span>
+          <span className="font-mono">SQLite · ChromaDB · Gemini Flash</span>
         </div>
       </footer>
     </div>
