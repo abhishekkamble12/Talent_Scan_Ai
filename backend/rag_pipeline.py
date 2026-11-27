@@ -114,6 +114,19 @@ class RAGPipeline:
         chunks_with_ids = self.calculate_chunk_ids(chunks)
         logging.info(f"Existing chunks in DB: {len(existing_ids)}")
 
+        # Clean up stale chunks for files being uploaded
+        sources = {chunk.metadata.get("source") for chunk in chunks_with_ids if chunk.metadata.get("source")}
+        for src in sources:
+            try:
+                matching_docs = db.get(where={"source": src}, include=[])
+                matching_ids = matching_docs.get("ids", [])
+                if matching_ids:
+                    logging.info(f"Purging {len(matching_ids)} stale chunks for source: {src}")
+                    db.delete(ids=matching_ids)
+                    existing_ids.difference_update(matching_ids)
+            except Exception as del_err:
+                logging.debug(f"Notice during source purge: {del_err}")
+
         new_chunks = [chunk for chunk in chunks_with_ids if chunk.metadata["id"] not in existing_ids]
 
         if new_chunks:
@@ -148,6 +161,16 @@ class RAGPipeline:
         if os.path.exists(self.database_path):
             shutil.rmtree(self.database_path)
             logging.info(f"Cleared database at {self.database_path}")
+        try:
+            from utils import invalidate_chroma_cache
+            invalidate_chroma_cache()
+        except ImportError:
+            pass
+        try:
+            from aiops_metrics import metrics_store
+            metrics_store.clear_candidate_profiles()
+        except Exception:
+            pass
 
     def run_pipeline(self) -> Dict[str, Any]:
         import time
@@ -160,6 +183,28 @@ class RAGPipeline:
                 res = {"status": "empty", "message": "No documents found to process.", "total_chunks": 0}
                 metrics_store.log_pipeline_run(0, 0, 0, 0, status="empty")
                 return res
+
+            # Extract and persist candidate profiles
+            try:
+                from candidate_extractor import extract_profile_from_pages
+                docs_by_source = {}
+                for doc in documents:
+                    src = doc.metadata.get("source", "")
+                    if src:
+                        docs_by_source.setdefault(src, []).append(doc.page_content)
+                for src_file, pages in docs_by_source.items():
+                    profile = extract_profile_from_pages(src_file, pages)
+                    metrics_store.upsert_candidate_profile(
+                        filename=profile["filename"],
+                        candidate_name=profile["candidate_name"],
+                        top_skills=profile["top_skills"],
+                        estimated_years_exp=profile["estimated_years_exp"],
+                        education=profile["education"],
+                        summary=profile["summary"],
+                    )
+            except Exception as ext_err:
+                logging.warning(f"Failed extracting candidate profiles: {ext_err}")
+
             chunks = self.chunk_documents(documents)
             stats = self.populate_chroma(chunks)
             elapsed_ms = (time.perf_counter() - start_time) * 1000

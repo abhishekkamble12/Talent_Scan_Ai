@@ -68,6 +68,7 @@ const LLMQueryComponent = ({
   const [copied, setCopied] = useState(false);
   const responseRef = useRef(null);
   const textareaRef = useRef(null);
+  const abortControllerRef = useRef(null);
 
   const hasResumes = Boolean(currentStatus?.resumes_count && currentStatus.resumes_count > 0);
 
@@ -85,31 +86,112 @@ const LLMQueryComponent = ({
     }
   }, [response]);
 
+  const handleStopGenerating = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setLoading(false);
+    }
+  }, []);
+
   const handleAsk = useCallback(async (q) => {
     const query = (q || question).trim();
     if (!query) return;
+
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoading(true);
     setError("");
     setResponse("");
     setActivePrompt(query);
+
+    let accumulatedAnswer = "";
+
     try {
-      const res = await axios.post(`${BACKEND_URL}/api/predict`, { question: query });
-      if (res.data?.answer) {
-        setResponse(res.data.answer);
-        setRecentHistory((prev) => {
-          const filtered = prev.filter((item) => item.question !== query);
-          return [{ question: query, answer: res.data.answer }, ...filtered].slice(0, 5);
-        });
-        onQuerySuccess?.();
-      } else {
-        setError("No candidate evaluation was returned by the screening pipeline.");
+      const sseRes = await fetch(`${BACKEND_URL}/api/predict/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: query }),
+        signal: controller.signal,
+      });
+
+      if (!sseRes.ok || !sseRes.body) {
+        // Fallback to standard synchronous predict endpoint
+        const res = await axios.post(
+          `${BACKEND_URL}/api/predict`,
+          { question: query },
+          { signal: controller.signal }
+        );
+        if (res.data?.answer) {
+          accumulatedAnswer = res.data.answer;
+          setResponse(accumulatedAnswer);
+          setRecentHistory((prev) => {
+            const filtered = prev.filter((item) => item.question !== query);
+            return [{ question: query, answer: accumulatedAnswer }, ...filtered].slice(0, 5);
+          });
+          onQuerySuccess?.();
+        } else {
+          setError("No candidate evaluation was returned by the screening pipeline.");
+        }
+        return;
+      }
+
+      const reader = sseRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("data:")) {
+            const jsonStr = trimmed.slice(5).trim();
+            try {
+              const data = JSON.parse(jsonStr);
+              if (data.token) {
+                accumulatedAnswer += data.token;
+                setResponse((prev) => prev + data.token);
+              } else if (data.done) {
+                if (data.answer) {
+                  accumulatedAnswer = data.answer;
+                  setResponse(accumulatedAnswer);
+                }
+                setRecentHistory((prev) => {
+                  const filtered = prev.filter((item) => item.question !== query);
+                  return [{ question: query, answer: accumulatedAnswer }, ...filtered].slice(0, 5);
+                });
+                onQuerySuccess?.();
+              } else if (data.error) {
+                setError(data.error);
+              }
+            } catch {
+              // Ignore non-JSON heartbeat lines
+            }
+          }
+        }
       }
     } catch (err) {
+      if (err.name === "AbortError" || err.code === "ERR_CANCELED") {
+        // User aborted intentionally
+        return;
+      }
       setError(
         err.response?.data?.error ||
+          err.message ||
           "Unable to reach the backend service. Please verify the API server is running."
       );
     } finally {
+      abortControllerRef.current = null;
       setLoading(false);
     }
   }, [question, onQuerySuccess]);
@@ -251,27 +333,29 @@ const LLMQueryComponent = ({
             <div className="absolute bottom-3 left-3 text-micro text-tertiary">
               Press <kbd className="font-mono px-1 py-0.5 rounded bg-elevated border border-subtle text-[11px]">Ctrl+Enter</kbd> to run
             </div>
-            <button
-              type="submit"
-              disabled={loading || !question.trim()}
-              className={`absolute right-2.5 bottom-2.5 px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all focus-ring interactive-button ${
-                loading || !question.trim()
-                  ? "bg-elevated text-tertiary border border-subtle cursor-not-allowed opacity-60"
-                  : "bg-accent hover:bg-accent-hover text-root"
-              }`}
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Analyzing…</span>
-                </>
-              ) : (
-                <>
-                  <span>Run Analysis</span>
-                  <Send className="w-3 h-3" />
-                </>
-              )}
-            </button>
+            {loading ? (
+              <button
+                type="button"
+                onClick={handleStopGenerating}
+                className="absolute right-2.5 bottom-2.5 px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all focus-ring interactive-button bg-status-danger text-white hover:opacity-90"
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!question.trim()}
+                className={`absolute right-2.5 bottom-2.5 px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all focus-ring interactive-button ${
+                  !question.trim()
+                    ? "bg-elevated text-tertiary border border-subtle cursor-not-allowed opacity-60"
+                    : "bg-accent hover:bg-accent-hover text-root"
+                }`}
+              >
+                <span>Run Analysis</span>
+                <Send className="w-3 h-3" />
+              </button>
+            )}
           </form>
         </div>
 

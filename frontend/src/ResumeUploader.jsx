@@ -71,7 +71,10 @@ const ResumeUploader = ({ onDataUpdated, currentStatus }) => {
     });
   };
 
-  const handleFileChange = (e) => addPdfs(e.target.files || []);
+  const handleFileChange = (e) => {
+    addPdfs(e.target.files || []);
+    e.target.value = "";
+  };
 
   const handleDrop = (e) => {
     e.preventDefault();
@@ -89,16 +92,20 @@ const ResumeUploader = ({ onDataUpdated, currentStatus }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!selectedFiles.length) {
-      setAlert({ type: "error", message: "Please select at least one PDF resume to upload." });
-      return;
-    }
     if (!jobDescription.trim()) {
       setAlert({ type: "error", message: "Please provide a job description before indexing." });
       return;
     }
+    if (!selectedFiles.length && indexedResumes.length === 0) {
+      setAlert({ type: "error", message: "Please select at least one PDF resume to upload." });
+      return;
+    }
     setLoading(true);
-    setLoadingMessage("Extracting resume text & indexing embeddings…");
+    setLoadingMessage(
+      selectedFiles.length > 0
+        ? "Extracting resume text & indexing embeddings…"
+        : "Updating job description…"
+    );
     setAlert(null);
     const formData = new FormData();
     selectedFiles.forEach((f) => formData.append("resumes", f));
@@ -109,7 +116,11 @@ const ResumeUploader = ({ onDataUpdated, currentStatus }) => {
       });
       setAlert({
         type: "success",
-        message: res.data.message || `Indexed ${selectedFiles.length} candidate resumes.`,
+        message:
+          res.data.message ||
+          (selectedFiles.length > 0
+            ? `Indexed ${selectedFiles.length} candidate resumes.`
+            : "Job description updated."),
       });
       setSelectedFiles([]);
       onDataUpdated?.();
@@ -387,7 +398,11 @@ const ResumeUploader = ({ onDataUpdated, currentStatus }) => {
               ) : (
                 <>
                   <Database className="w-3.5 h-3.5" />
-                  <span>Index Candidates &amp; Role</span>
+                  <span>
+                    {selectedFiles.length === 0 && indexedResumes.length > 0
+                      ? "Save Job Description"
+                      : "Index Candidates & Role"}
+                  </span>
                 </>
               )}
             </button>

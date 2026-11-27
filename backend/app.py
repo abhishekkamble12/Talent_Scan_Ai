@@ -1,14 +1,18 @@
 import os
 import re
 import sys
+import time
 import logging
 import shutil
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, Query, UploadFile
+from fastapi import FastAPI, File, Form, Query, UploadFile, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import uvicorn
@@ -18,7 +22,7 @@ backend_dir = Path(__file__).resolve().parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from utils import query_rag, get_api_key
+from utils import query_rag, stream_rag, get_api_key, invalidate_chroma_cache
 from rag_pipeline import RAGPipeline
 from aiops_metrics import metrics_store
 
@@ -34,14 +38,63 @@ app = FastAPI(
     version="2.0.0",
 )
 
+# ── Environment-Driven CORS ──
+raw_origins = os.getenv("ALLOWED_ORIGINS", "").strip()
+if raw_origins:
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+else:
+    allowed_origins = ["*", "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://localhost:5000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*", "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── In-Memory Rate Limiting for Prediction Endpoints ──
+_RATE_LIMIT_BUCKET = defaultdict(list)
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/predict"):
+            client_ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            window_start = now - 60
+            _RATE_LIMIT_BUCKET[client_ip] = [ts for ts in _RATE_LIMIT_BUCKET[client_ip] if ts > window_start]
+            if len(_RATE_LIMIT_BUCKET[client_ip]) >= RATE_LIMIT_PER_MINUTE:
+                return JSONResponse(
+                    status_code=429,
+                    content={"error": f"Rate limit exceeded ({RATE_LIMIT_PER_MINUTE} requests/min). Please try again shortly."}
+                )
+            _RATE_LIMIT_BUCKET[client_ip].append(now)
+        return await call_next(request)
+
+app.add_middleware(RateLimitMiddleware)
+
+# ── Optional Token Auth Dependency ──
+def verify_token_optional(
+    authorization: Optional[str] = Header(None),
+    x_api_key: Optional[str] = Header(None),
+):
+    """If APP_ACCESS_TOKEN is set in .env, requires Bearer or X-API-Key authentication."""
+    expected_token = os.getenv("APP_ACCESS_TOKEN", "").strip()
+    if not expected_token:
+        return True
+
+    provided = None
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    elif x_api_key:
+        provided = x_api_key.strip()
+
+    if provided != expected_token:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid or missing access token.")
+    return True
+
+MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(15 * 1024 * 1024))) # 15MB default
 UPLOAD_FOLDER = PROJECT_ROOT / "uploads"
 DATABASE_PATH = PROJECT_ROOT / "chroma"
 SAMPLE_PDFS_DIR = PROJECT_ROOT / "bot" / "data" / "pdfs"
@@ -77,6 +130,7 @@ Qualifications:
 class PredictRequest(BaseModel):
     question: str = ""
     job_description: Optional[str] = ""
+    candidate_filter: Optional[str] = None
 
 
 def allowed_file(filename: str) -> bool:
@@ -122,7 +176,7 @@ def get_status():
 
 
 @app.post("/api/load-sample")
-def load_sample_data():
+def load_sample_data(_auth: bool = Depends(verify_token_optional)):
     """Pre-loads bundled sample resumes and a standard Software Engineer JD for instant 1-click demos."""
     try:
         if not SAMPLE_PDFS_DIR.exists():
@@ -148,6 +202,7 @@ def load_sample_data():
             database_path=str(DATABASE_PATH),
         )
         stats = pipeline.run_pipeline()
+        invalidate_chroma_cache()
 
         return {
             "message": f"Successfully loaded {copied_count} demo resumes and sample job description!",
@@ -165,20 +220,53 @@ def load_sample_data():
 def upload_resumes(
     job_description: str = Form(""),
     resumes: List[UploadFile] = File(default=[]),
+    _auth: bool = Depends(verify_token_optional),
 ):
     """Uploads job description and resumes as part of a multi-part form-data request."""
     try:
         jd_text = job_description.strip()
-        if not resumes or not resumes[0].filename:
-            return JSONResponse(status_code=400, content={"error": "Please provide at least one PDF resume."})
-
         if not jd_text:
             return JSONResponse(status_code=400, content={"error": "Job description is required."})
+
+        has_new_files = bool(resumes and any(f and f.filename for f in resumes))
+        existing_pdfs = [f for f in os.listdir(pdfs_path) if f.lower().endswith(".pdf")] if pdfs_path.exists() else []
+
+        if not has_new_files:
+            if not existing_pdfs:
+                return JSONResponse(status_code=400, content={"error": "Please provide at least one PDF resume."})
+            with open(jd_path / "job_description.txt", "w", encoding="utf-8") as jd_file:
+                jd_file.write(jd_text)
+            return {
+                "message": f"Updated job description for {len(existing_pdfs)} indexed resumes.",
+                "saved_files": [],
+                "pipeline_stats": None,
+            }
 
         saved_files = []
         for file in resumes:
             if file and file.filename and allowed_file(file.filename):
                 filename = sanitize_filename(file.filename)
+
+                # 1. Magic bytes check: must start with %PDF-
+                magic = file.file.read(5)
+                file.file.seek(0)
+                if magic != b"%PDF-":
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"File '{file.filename}' is not a valid PDF (%PDF- header missing)."}
+                    )
+
+                # 2. File size check
+                file.file.seek(0, os.SEEK_END)
+                size = file.file.tell()
+                file.file.seek(0)
+                if size > MAX_FILE_SIZE_BYTES:
+                    max_mb = MAX_FILE_SIZE_BYTES // (1024 * 1024)
+                    return JSONResponse(
+                        status_code=400,
+                        content={"error": f"File '{file.filename}' exceeds maximum allowed size of {max_mb}MB."}
+                    )
+
                 target_file = pdfs_path / filename
                 with open(target_file, "wb") as out:
                     shutil.copyfileobj(file.file, out)
@@ -196,6 +284,7 @@ def upload_resumes(
             database_path=str(DATABASE_PATH),
         )
         pipeline_stats = rag_pipeline.run_pipeline()
+        invalidate_chroma_cache()
 
         return {
             "message": f"Successfully ingested {len(saved_files)} resumes and indexed content.",
@@ -209,7 +298,7 @@ def upload_resumes(
 
 
 @app.post("/api/reset")
-def reset_uploads():
+def reset_uploads(_auth: bool = Depends(verify_token_optional)):
     """Resets the uploaded files and clears the ChromaDB vector database."""
     try:
         for folder in [jd_path, pdfs_path]:
@@ -221,6 +310,7 @@ def reset_uploads():
 
         if DATABASE_PATH.exists():
             shutil.rmtree(DATABASE_PATH)
+        invalidate_chroma_cache()
 
         return {"message": "All uploads and vector databases have been reset."}
 
@@ -248,6 +338,7 @@ def predict(payload: PredictRequest):
             job_description=job_description,
             question=question,
             database_path=str(DATABASE_PATH),
+            candidate_filter=payload.candidate_filter,
         )
 
         return {"answer": response}
@@ -255,6 +346,106 @@ def predict(payload: PredictRequest):
     except Exception as e:
         logging.error(f"Error in /api/predict: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"error": f"An error occurred while processing: {str(e)}"})
+
+
+@app.post("/api/predict/stream")
+def predict_stream(payload: PredictRequest):
+    """Real-time SSE streaming endpoint for RAG question answering."""
+    try:
+        question = payload.question.strip()
+        if not question:
+            return JSONResponse(status_code=400, content={"error": "A question is required."})
+
+        job_description = (payload.job_description or "").strip()
+        jd_file = jd_path / "job_description.txt"
+
+        if not job_description and jd_file.exists():
+            with open(jd_file, "r", encoding="utf-8") as f:
+                job_description = f.read()
+
+        return StreamingResponse(
+            stream_rag(
+                job_description=job_description,
+                question=question,
+                database_path=str(DATABASE_PATH),
+                candidate_filter=payload.candidate_filter,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as e:
+        logging.error(f"Error in /api/predict/stream: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": f"Streaming error: {str(e)}"})
+
+
+@app.get("/api/candidates")
+def get_candidates():
+    """Returns list of structured candidate profiles extracted from resumes."""
+    try:
+        profiles = metrics_store.get_all_candidate_profiles()
+        existing_pdfs = [f for f in os.listdir(pdfs_path) if f.lower().endswith(".pdf")] if pdfs_path.exists() else []
+
+        # If profiles are missing for any existing PDFs, extract and backfill
+        existing_filenames = {p.get("filename") for p in profiles}
+        missing = [f for f in existing_pdfs if f not in existing_filenames]
+        if missing:
+            from candidate_extractor import extract_profile_from_pages
+            from langchain_community.document_loaders import PyPDFLoader
+            for fname in missing:
+                fpath = pdfs_path / fname
+                try:
+                    loader = PyPDFLoader(str(fpath))
+                    pages = [p.page_content for p in loader.load()]
+                    prof = extract_profile_from_pages(fname, pages)
+                    metrics_store.upsert_candidate_profile(
+                        filename=prof["filename"],
+                        candidate_name=prof["candidate_name"],
+                        top_skills=prof["top_skills"],
+                        estimated_years_exp=prof["estimated_years_exp"],
+                        education=prof["education"],
+                        summary=prof["summary"],
+                    )
+                except Exception as f_err:
+                    logging.warning(f"Failed extracting profile for {fname}: {f_err}")
+            profiles = metrics_store.get_all_candidate_profiles()
+
+        return {"candidates": profiles, "total": len(profiles)}
+    except Exception as e:
+        logging.error(f"Error fetching candidates: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.delete("/api/candidates/{filename}")
+def delete_candidate(filename: str, _auth: bool = Depends(verify_token_optional)):
+    """Deletes a specific candidate resume, removes from Chroma vector store, and clears profile."""
+    try:
+        sanitized = sanitize_filename(filename)
+        target_file = pdfs_path / sanitized
+        if target_file.exists():
+            target_file.unlink()
+
+        metrics_store.delete_candidate_profile(sanitized)
+
+        # Invalidate Chroma cache and re-index remaining
+        invalidate_chroma_cache()
+        if pdfs_path.exists() and any(f.endswith(".pdf") for f in os.listdir(pdfs_path)):
+            rag_pipeline = RAGPipeline(
+                document_type="pdf",
+                data_path=str(pdfs_path),
+                database_path=str(DATABASE_PATH),
+            )
+            rag_pipeline.run_pipeline()
+        elif DATABASE_PATH.exists():
+            shutil.rmtree(DATABASE_PATH)
+
+        return {"message": f"Candidate '{sanitized}' deleted successfully."}
+    except Exception as e:
+        logging.error(f"Error deleting candidate {filename}: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ─────────────────────────────────────────────────────────────

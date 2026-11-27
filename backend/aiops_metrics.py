@@ -56,6 +56,7 @@ class QueryMetrics:
     coherence: float = 0.0
     completeness: float = 0.0
     hallucination_risk: float = 0.0
+    eval_reasoning: str = ""
     
     # Status
     status: str = "success"  # success | error | timeout
@@ -101,6 +102,7 @@ class MetricsStore:
                     coherence REAL DEFAULT 0,
                     completeness REAL DEFAULT 0,
                     hallucination_risk REAL DEFAULT 0,
+                    eval_reasoning TEXT DEFAULT '',
                     status TEXT DEFAULT 'success',
                     error_message TEXT DEFAULT '',
                     estimated_cost_usd REAL DEFAULT 0
@@ -118,6 +120,23 @@ class MetricsStore:
                     error_message TEXT DEFAULT ''
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS candidate_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT UNIQUE NOT NULL,
+                    candidate_name TEXT DEFAULT '',
+                    top_skills TEXT DEFAULT '',
+                    estimated_years_exp REAL DEFAULT 0,
+                    education TEXT DEFAULT '',
+                    summary TEXT DEFAULT '',
+                    created_at TEXT NOT NULL
+                )
+            """)
+            # Schema migration check: ensure eval_reasoning exists
+            try:
+                conn.execute("ALTER TABLE query_metrics ADD COLUMN eval_reasoning TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
     
     @contextmanager
@@ -145,7 +164,7 @@ class MetricsStore:
             conn.commit()
         logging.info(f"[AIOps] Logged metrics for query_id={metrics.query_id}")
 
-    def update_evaluation(self, query_id: str, scores: Dict[str, float]):
+    def update_evaluation(self, query_id: str, scores: Dict[str, Any]):
         """Update evaluation metrics for an existing query asynchronously."""
         with self._connect() as conn:
             conn.execute("""
@@ -154,7 +173,8 @@ class MetricsStore:
                     groundedness = ?,
                     coherence = ?,
                     completeness = ?,
-                    hallucination_risk = ?
+                    hallucination_risk = ?,
+                    eval_reasoning = ?
                 WHERE query_id = ?
             """, [
                 scores.get("answer_relevance", 0.0),
@@ -162,10 +182,11 @@ class MetricsStore:
                 scores.get("coherence", 0.0),
                 scores.get("completeness", 0.0),
                 scores.get("hallucination_risk", 0.0),
+                str(scores.get("eval_reasoning", "")),
                 query_id
             ])
             conn.commit()
-        logging.info(f"[AIOps] Updated evaluation scores for query_id={query_id}")
+        logging.info(f"[AIOps] Updated evaluation scores for query_id={query_id}: {scores}")
 
     def log_pipeline_run(self, docs_loaded: int, chunks_created: int, chunks_added: int, 
                          latency_ms: float, status: str = "success", error: str = ""):
@@ -304,6 +325,39 @@ class MetricsStore:
                 FROM query_metrics ORDER BY id DESC LIMIT ?
             """, [limit]).fetchall()
             return [dict(r) for r in reversed(rows)]
+
+    # ── Candidate Profile Storage ──
+    def upsert_candidate_profile(self, filename: str, candidate_name: str, top_skills: str,
+                                 estimated_years_exp: float, education: str, summary: str):
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute("""
+                INSERT INTO candidate_profiles (filename, candidate_name, top_skills, estimated_years_exp, education, summary, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(filename) DO UPDATE SET
+                    candidate_name = excluded.candidate_name,
+                    top_skills = excluded.top_skills,
+                    estimated_years_exp = excluded.estimated_years_exp,
+                    education = excluded.education,
+                    summary = excluded.summary,
+                    created_at = excluded.created_at
+            """, [filename, candidate_name, top_skills, estimated_years_exp, education, summary, now])
+            conn.commit()
+
+    def get_all_candidate_profiles(self) -> List[Dict]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM candidate_profiles ORDER BY candidate_name ASC, filename ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_candidate_profile(self, filename: str):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM candidate_profiles WHERE filename = ?", [filename])
+            conn.commit()
+
+    def clear_candidate_profiles(self):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM candidate_profiles")
+            conn.commit()
 
 
 # Global singleton instance

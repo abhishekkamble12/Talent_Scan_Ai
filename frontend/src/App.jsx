@@ -158,9 +158,10 @@ const App = () => {
     }
   };
 
-  const handleScreenCandidate = (filename) => {
+  const handleScreenCandidate = (filename, candidateName) => {
+    const label = candidateName ? `${candidateName} (${filename})` : filename;
     setExternalPrompt(
-      `Summarize the strengths, relevant experience, and overall fit of ${filename} for this job description.`
+      `Summarize the strengths, relevant experience, and overall fit of ${label} for this job description.`
     );
     setActiveTab("app");
   };
@@ -619,6 +620,7 @@ const App = () => {
                 onNavigateToScreening={() => handleSelectTab("app")}
                 onLoadSample={handleLoadSampleFromShell}
                 loadingSample={loadingSample}
+                onDataUpdated={fetchStatus}
               />
             </section>
           )}
