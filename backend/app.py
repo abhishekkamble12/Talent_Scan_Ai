@@ -333,7 +333,7 @@ async def upload_job_candidates(
                 continue
 
             # Verify size
-            await file.seek(0, os.SEEK_END)
+            file.file.seek(0, os.SEEK_END)
             size = file.file.tell()
             await file.seek(0)
             if size > MAX_FILE_SIZE_BYTES:

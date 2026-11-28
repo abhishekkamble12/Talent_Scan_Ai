@@ -276,3 +276,24 @@ def test_v2_upskilling_roadmap_and_smart_reranker():
     assert "smart_score" in cands[0]
     assert "smart_boost" in cands[0]
 
+
+def test_bulk_resume_upload_to_job():
+    """Test bulk uploading PDF resumes to a job workspace without seek/signature error."""
+    import io
+    job = client.post("/api/jobs", json={
+        "title": "Bulk Ingest Job",
+        "description": "Python developer with FastAPI experience."
+    }).json()
+    job_id = job["id"]
+
+    pdf_dummy_bytes = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF"
+    files = [
+        ("resumes", ("cand_alpha.pdf", io.BytesIO(pdf_dummy_bytes), "application/pdf")),
+        ("resumes", ("cand_beta.pdf", io.BytesIO(pdf_dummy_bytes), "application/pdf")),
+    ]
+    res = client.post(f"/api/jobs/{job_id}/candidates", files=files, data={"source": "direct_upload"})
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert len(data["uploaded"]) == 2
+
+
